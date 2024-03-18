@@ -575,9 +575,9 @@ due parti ``err_free_bar:`` e ``err_free_foo:``:
 
 .. code-block:: c
 
-	 err_free_bar:
+	err_free_bar:
 		kfree(foo->bar);
-	 err_free_foo:
+	err_free_foo:
 		kfree(foo);
 		return ret;
 
@@ -671,7 +671,7 @@ segue nel vostro file .emacs:
           (c-offsets-alist . (
                   (arglist-close         . c-lineup-arglist-tabs-only)
                   (arglist-cont-nonempty .
-		      (c-lineup-gcc-asm-reg c-lineup-arglist-tabs-only))
+                      (c-lineup-gcc-asm-reg c-lineup-arglist-tabs-only))
                   (arglist-intro         . +)
                   (brace-list-intro      . +)
                   (c                     . c-lineup-C-comments)
@@ -1204,10 +1204,10 @@ ISBN 0-201-61586-X.
 
 Manuali GNU - nei casi in cui sono compatibili con K&R e questo documento -
 per indent, cpp, gcc e i suoi dettagli interni, tutto disponibile qui
-http://www.gnu.org/manual/
+https://www.gnu.org/manual/
 
 WG14 è il gruppo internazionale di standardizzazione per il linguaggio C,
-URL: http://www.open-std.org/JTC1/SC22/WG14/
+URL: https://www.open-std.org/JTC1/SC22/WG14/
 
-Kernel process/coding-style.rst, by greg@kroah.com at OLS 2002:
+Kernel CodingStyle, by greg@kroah.com at OLS 2002:
 http://www.kroah.com/linux/talks/ols_2002_kernel_codingstyle_talk/html/

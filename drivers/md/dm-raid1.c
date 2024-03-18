@@ -278,7 +278,7 @@ static int mirror_flush(struct dm_target *ti)
 	}
 
 	error_bits = -1;
-	dm_io(&io_req, ms->nr_mirrors, io, &error_bits);
+	dm_io(&io_req, ms->nr_mirrors, io, &error_bits, IOPRIO_DEFAULT);
 	if (unlikely(error_bits != 0)) {
 		for (i = 0; i < ms->nr_mirrors; i++)
 			if (test_bit(i, &error_bits))
@@ -554,7 +554,7 @@ static void read_async_bio(struct mirror *m, struct bio *bio)
 
 	map_region(&io, m, bio);
 	bio_set_m(bio, m);
-	BUG_ON(dm_io(&io_req, 1, &io, NULL));
+	BUG_ON(dm_io(&io_req, 1, &io, NULL, IOPRIO_DEFAULT));
 }
 
 static inline int region_in_sync(struct mirror_set *ms, region_t region,
@@ -604,7 +604,7 @@ static void do_reads(struct mirror_set *ms, struct bio_list *reads)
 static void write_callback(unsigned long error, void *context)
 {
 	unsigned int i;
-	struct bio *bio = (struct bio *) context;
+	struct bio *bio = context;
 	struct mirror_set *ms;
 	int should_wake = 0;
 	unsigned long flags;
@@ -681,7 +681,7 @@ static void do_write(struct mirror_set *ms, struct bio *bio)
 	 */
 	bio_set_m(bio, get_default_mirror(ms));
 
-	BUG_ON(dm_io(&io_req, ms->nr_mirrors, io, NULL));
+	BUG_ON(dm_io(&io_req, ms->nr_mirrors, io, NULL, IOPRIO_DEFAULT));
 }
 
 static void do_writes(struct mirror_set *ms, struct bio_list *writes)
@@ -1180,7 +1180,7 @@ err_free_context:
 
 static void mirror_dtr(struct dm_target *ti)
 {
-	struct mirror_set *ms = (struct mirror_set *) ti->private;
+	struct mirror_set *ms = ti->private;
 
 	del_timer_sync(&ms->timer);
 	flush_workqueue(ms->kmirrord_wq);
@@ -1246,7 +1246,7 @@ static int mirror_end_io(struct dm_target *ti, struct bio *bio,
 		blk_status_t *error)
 {
 	int rw = bio_data_dir(bio);
-	struct mirror_set *ms = (struct mirror_set *) ti->private;
+	struct mirror_set *ms = ti->private;
 	struct mirror *m = NULL;
 	struct dm_bio_details *bd = NULL;
 	struct dm_raid1_bio_record *bio_record =
@@ -1311,7 +1311,7 @@ out:
 
 static void mirror_presuspend(struct dm_target *ti)
 {
-	struct mirror_set *ms = (struct mirror_set *) ti->private;
+	struct mirror_set *ms = ti->private;
 	struct dm_dirty_log *log = dm_rh_dirty_log(ms->rh);
 
 	struct bio_list holds;
@@ -1407,7 +1407,7 @@ static void mirror_status(struct dm_target *ti, status_type_t type,
 {
 	unsigned int m, sz = 0;
 	int num_feature_args = 0;
-	struct mirror_set *ms = (struct mirror_set *) ti->private;
+	struct mirror_set *ms = ti->private;
 	struct dm_dirty_log *log = dm_rh_dirty_log(ms->rh);
 	char buffer[MAX_NR_MIRRORS + 1];
 
@@ -1498,23 +1498,21 @@ static struct target_type mirror_target = {
 
 static int __init dm_mirror_init(void)
 {
-	int r = -ENOMEM;
+	int r;
 
 	dm_raid1_wq = alloc_workqueue("dm_raid1_wq", 0, 0);
-	if (!dm_raid1_wq)
-		goto bad_target;
+	if (!dm_raid1_wq) {
+		DMERR("Failed to alloc workqueue");
+		return -ENOMEM;
+	}
 
 	r = dm_register_target(&mirror_target);
 	if (r < 0) {
 		destroy_workqueue(dm_raid1_wq);
-		goto bad_target;
+		return r;
 	}
 
 	return 0;
-
-bad_target:
-	DMERR("Failed to register mirror target");
-	return r;
 }
 
 static void __exit dm_mirror_exit(void)

@@ -15,7 +15,7 @@
 		__overlay__ {
 			#address-cells = <1>;
 			#size-cells = <0>;
-			spi_nand: spi_nand@0 {
+			spi_nand: flash@0 {
 				compatible = "spi-nand";
 				reg = <0>;
 				spi-max-frequency = <10000000>;
@@ -29,13 +29,13 @@
 
 					partition@0 {
 						label = "bl2";
-						reg = <0x0 0x80000>;
+						reg = <0x0 0x100000>;
 						read-only;
 					};
 
-					partition@80000 {
+					partition@100000 {
 						label = "reserved";
-						reg = <0x80000 0x300000>;
+						reg = <0x100000 0x280000>;
 					};
 
 					partition@380000 {

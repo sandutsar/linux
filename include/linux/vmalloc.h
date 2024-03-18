@@ -14,6 +14,7 @@
 
 struct vm_area_struct;		/* vma defining user mapping in mm_types.h */
 struct notifier_block;		/* in notifier.h */
+struct iov_iter;		/* in uio.h */
 
 /* bits in flags of vmalloc's vm_struct below */
 #define VM_IOREMAP		0x00000001	/* ioremap() and friends */
@@ -34,6 +35,7 @@ struct notifier_block;		/* in notifier.h */
 #else
 #define VM_DEFER_KMEMLEAK	0
 #endif
+#define VM_SPARSE		0x00001000	/* sparse vm_area. not all pages are present. */
 
 /* bits [20..32] reserved for arch specific ioremap internals */
 
@@ -131,12 +133,8 @@ extern void *vm_map_ram(struct page **pages, unsigned int count, int node);
 extern void vm_unmap_aliases(void);
 
 #ifdef CONFIG_MMU
-extern void __init vmalloc_init(void);
 extern unsigned long vmalloc_nr_pages(void);
 #else
-static inline void vmalloc_init(void)
-{
-}
 static inline unsigned long vmalloc_nr_pages(void) { return 0; }
 #endif
 
@@ -235,6 +233,10 @@ static inline bool is_vm_area_hugepages(const void *addr)
 }
 
 #ifdef CONFIG_MMU
+int vm_area_map_pages(struct vm_struct *area, unsigned long start,
+		      unsigned long end, struct page **pages);
+void vm_area_unmap_pages(struct vm_struct *area, unsigned long start,
+			 unsigned long end);
 void vunmap_range(unsigned long addr, unsigned long end);
 static inline void set_vm_flush_reset_perms(void *addr)
 {
@@ -251,12 +253,11 @@ static inline void set_vm_flush_reset_perms(void *addr)
 #endif
 
 /* for /proc/kcore */
-extern long vread(char *buf, char *addr, unsigned long count);
+extern long vread_iter(struct iov_iter *iter, const char *addr, size_t count);
 
 /*
  *	Internals.  Don't use..
  */
-extern struct list_head vmap_area_list;
 extern __init void vm_area_add_early(struct vm_struct *vm);
 extern __init void vm_area_register_early(struct vm_struct *vm, size_t align);
 

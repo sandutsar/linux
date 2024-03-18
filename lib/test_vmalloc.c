@@ -53,6 +53,7 @@ __param(int, run_test_mask, INT_MAX,
 		"\t\tid: 128,  name: pcpu_alloc_test\n"
 		"\t\tid: 256,  name: kvfree_rcu_1_arg_vmalloc_test\n"
 		"\t\tid: 512,  name: kvfree_rcu_2_arg_vmalloc_test\n"
+		"\t\tid: 1024, name: vm_map_ram_test\n"
 		/* Add a new test case description here. */
 );
 
@@ -116,7 +117,7 @@ static int align_shift_alloc_test(void)
 	int i;
 
 	for (i = 0; i < BITS_PER_LONG; i++) {
-		align = ((unsigned long) 1) << i;
+		align = 1UL << i;
 
 		ptr = __vmalloc_node(PAGE_SIZE, align, GFP_KERNEL|__GFP_ZERO, 0,
 				__builtin_return_address(0));
@@ -334,7 +335,7 @@ kvfree_rcu_1_arg_vmalloc_test(void)
 			return -1;
 
 		p->array[0] = 'a';
-		kvfree_rcu(p);
+		kvfree_rcu_mightsleep(p);
 	}
 
 	return 0;
@@ -358,6 +359,41 @@ kvfree_rcu_2_arg_vmalloc_test(void)
 	return 0;
 }
 
+static int
+vm_map_ram_test(void)
+{
+	unsigned long nr_allocated;
+	unsigned int map_nr_pages;
+	unsigned char *v_ptr;
+	struct page **pages;
+	int i;
+
+	map_nr_pages = nr_pages > 0 ? nr_pages:1;
+	pages = kcalloc(map_nr_pages, sizeof(struct page *), GFP_KERNEL);
+	if (!pages)
+		return -1;
+
+	nr_allocated = alloc_pages_bulk_array(GFP_KERNEL, map_nr_pages, pages);
+	if (nr_allocated != map_nr_pages)
+		goto cleanup;
+
+	/* Run the test loop. */
+	for (i = 0; i < test_loop_count; i++) {
+		v_ptr = vm_map_ram(pages, map_nr_pages, NUMA_NO_NODE);
+		*v_ptr = 'a';
+		vm_unmap_ram(v_ptr, map_nr_pages);
+	}
+
+cleanup:
+	for (i = 0; i < nr_allocated; i++)
+		__free_page(pages[i]);
+
+	kfree(pages);
+
+	/* 0 indicates success. */
+	return nr_allocated != map_nr_pages;
+}
+
 struct test_case_desc {
 	const char *test_name;
 	int (*test_func)(void);
@@ -374,6 +410,7 @@ static struct test_case_desc test_case_array[] = {
 	{ "pcpu_alloc_test", pcpu_alloc_test },
 	{ "kvfree_rcu_1_arg_vmalloc_test", kvfree_rcu_1_arg_vmalloc_test },
 	{ "kvfree_rcu_2_arg_vmalloc_test", kvfree_rcu_2_arg_vmalloc_test },
+	{ "vm_map_ram_test", vm_map_ram_test },
 	/* Add a new test case here. */
 };
 
@@ -464,7 +501,7 @@ static int test_func(void *private)
 }
 
 static int
-init_test_configurtion(void)
+init_test_configuration(void)
 {
 	/*
 	 * A maximum number of workers is defined as hard-coded
@@ -494,7 +531,7 @@ static void do_concurrent_test(void)
 	/*
 	 * Set some basic configurations plus sanity check.
 	 */
-	ret = init_test_configurtion();
+	ret = init_test_configuration();
 	if (ret < 0)
 		return;
 
@@ -563,12 +600,7 @@ static int vmalloc_test_init(void)
 	return -EAGAIN; /* Fail will directly unload the module */
 }
 
-static void vmalloc_test_exit(void)
-{
-}
-
 module_init(vmalloc_test_init)
-module_exit(vmalloc_test_exit)
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Uladzislau Rezki");

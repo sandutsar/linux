@@ -56,18 +56,18 @@ properties:
   ranges: true
 
 patternProperties:
-  "^sram@[a-z0-9]+":
-    type: object
-
-    properties:
-      compatible:
-        const: mmio-sram
+  "^sram@[a-f0-9]+":
+    $ref: /schemas/sram/sram.yaml#
+    unevaluatedProperties: false
 
     patternProperties:
       "^sram-section?@[a-f0-9]+$":
         type: object
+        additionalProperties: false
 
         properties:
+          reg: true
+
           compatible:
             oneOf:
               - const: allwinner,sun4i-a10-sram-a3-a4

@@ -6,10 +6,19 @@
 #ifndef BTRFS_COMPRESSION_H
 #define BTRFS_COMPRESSION_H
 
-#include <linux/blk_types.h>
 #include <linux/sizes.h>
+#include <linux/mm.h>
+#include <linux/list.h>
+#include <linux/workqueue.h>
+#include <linux/wait.h>
+#include "bio.h"
 
+struct address_space;
+struct page;
+struct inode;
 struct btrfs_inode;
+struct btrfs_ordered_extent;
+struct btrfs_bio;
 
 /*
  * We want to make sure that amount of RAM required to uncompress an extent is
@@ -23,6 +32,7 @@ struct btrfs_inode;
 
 /* Maximum length of compressed data stored on disk */
 #define BTRFS_MAX_COMPRESSED		(SZ_128K)
+#define BTRFS_MAX_COMPRESSED_PAGES	(BTRFS_MAX_COMPRESSED / PAGE_SIZE)
 static_assert((BTRFS_MAX_COMPRESSED % PAGE_SIZE) == 0);
 
 /* Maximum size of data before compression */
@@ -36,9 +46,6 @@ struct compressed_bio {
 
 	/* the pages with the compressed data on them */
 	struct page **compressed_pages;
-
-	/* inode that owns this data */
-	struct inode *inode;
 
 	/* starting offset in the inode for our pages */
 	u64 start;
@@ -55,14 +62,14 @@ struct compressed_bio {
 	/* Whether this is a write for writeback. */
 	bool writeback;
 
-	/* IO errors */
-	blk_status_t status;
-
 	union {
 		/* For reads, this is the bio we are copying the data into */
-		struct bio *orig_bio;
+		struct btrfs_bio *orig_bbio;
 		struct work_struct write_end_work;
 	};
+
+	/* Must be last. */
+	struct btrfs_bio bbio;
 };
 
 static inline unsigned int btrfs_compress_type(unsigned int type_level)
@@ -88,18 +95,17 @@ int btrfs_decompress(int type, const u8 *data_in, struct page *dest_page,
 int btrfs_decompress_buf2page(const char *buf, u32 buf_len,
 			      struct compressed_bio *cb, u32 decompressed);
 
-blk_status_t btrfs_submit_compressed_write(struct btrfs_inode *inode, u64 start,
-				  unsigned int len, u64 disk_start,
-				  unsigned int compressed_len,
+void btrfs_submit_compressed_write(struct btrfs_ordered_extent *ordered,
 				  struct page **compressed_pages,
 				  unsigned int nr_pages,
 				  blk_opf_t write_flags,
-				  struct cgroup_subsys_state *blkcg_css,
 				  bool writeback);
-void btrfs_submit_compressed_read(struct inode *inode, struct bio *bio,
-				  int mirror_num);
+void btrfs_submit_compressed_read(struct btrfs_bio *bbio);
 
 unsigned int btrfs_compress_str2level(unsigned int type, const char *str);
+
+struct page *btrfs_alloc_compr_page(void);
+void btrfs_free_compr_page(struct page *page);
 
 enum btrfs_compression_type {
 	BTRFS_COMPRESS_NONE  = 0,
@@ -148,7 +154,7 @@ int zlib_compress_pages(struct list_head *ws, struct address_space *mapping,
 		unsigned long *total_in, unsigned long *total_out);
 int zlib_decompress_bio(struct list_head *ws, struct compressed_bio *cb);
 int zlib_decompress(struct list_head *ws, const u8 *data_in,
-		struct page *dest_page, unsigned long start_byte, size_t srclen,
+		struct page *dest_page, unsigned long dest_pgoff, size_t srclen,
 		size_t destlen);
 struct list_head *zlib_alloc_workspace(unsigned int level);
 void zlib_free_workspace(struct list_head *ws);
@@ -159,7 +165,7 @@ int lzo_compress_pages(struct list_head *ws, struct address_space *mapping,
 		unsigned long *total_in, unsigned long *total_out);
 int lzo_decompress_bio(struct list_head *ws, struct compressed_bio *cb);
 int lzo_decompress(struct list_head *ws, const u8 *data_in,
-		struct page *dest_page, unsigned long start_byte, size_t srclen,
+		struct page *dest_page, unsigned long dest_pgoff, size_t srclen,
 		size_t destlen);
 struct list_head *lzo_alloc_workspace(unsigned int level);
 void lzo_free_workspace(struct list_head *ws);
@@ -169,7 +175,7 @@ int zstd_compress_pages(struct list_head *ws, struct address_space *mapping,
 		unsigned long *total_in, unsigned long *total_out);
 int zstd_decompress_bio(struct list_head *ws, struct compressed_bio *cb);
 int zstd_decompress(struct list_head *ws, const u8 *data_in,
-		struct page *dest_page, unsigned long start_byte, size_t srclen,
+		struct page *dest_page, unsigned long dest_pgoff, size_t srclen,
 		size_t destlen);
 void zstd_init_workspace_manager(void);
 void zstd_cleanup_workspace_manager(void);

@@ -222,10 +222,6 @@ static int rtl8723au_parse_efuse(struct rtl8xxxu_priv *priv)
 
 	priv->power_base = &rtl8723a_power_base;
 
-	dev_info(&priv->udev->dev, "Vendor: %.7s\n",
-		 efuse->vendor_name);
-	dev_info(&priv->udev->dev, "Product: %.41s\n",
-		 efuse->device_name);
 	return 0;
 }
 
@@ -435,8 +431,9 @@ void rtl8723a_set_crystal_cap(struct rtl8xxxu_priv *priv, u8 crystal_cap)
 	cfo->crystal_cap = crystal_cap;
 }
 
-s8 rtl8723a_cck_rssi(struct rtl8xxxu_priv *priv, u8 cck_agc_rpt)
+s8 rtl8723a_cck_rssi(struct rtl8xxxu_priv *priv, struct rtl8723au_phy_stats *phy_stats)
 {
+	u8 cck_agc_rpt = phy_stats->cck_agc_rpt_ofdm_cfosho_a;
 	s8 rx_pwr_all = 0x00;
 
 	switch (cck_agc_rpt & 0xc0) {
@@ -487,6 +484,7 @@ struct rtl8xxxu_fileops rtl8723au_fops = {
 	.load_firmware = rtl8723au_load_firmware,
 	.power_on = rtl8723au_power_on,
 	.power_off = rtl8xxxu_power_off,
+	.read_efuse = rtl8xxxu_read_efuse,
 	.reset_8051 = rtl8xxxu_reset_8051,
 	.llt_init = rtl8xxxu_init_llt_table,
 	.init_phy_bb = rtl8xxxu_gen1_init_phy_bb,
@@ -495,6 +493,7 @@ struct rtl8xxxu_fileops rtl8723au_fops = {
 	.phy_iq_calibrate = rtl8xxxu_gen1_phy_iq_calibrate,
 	.config_channel = rtl8xxxu_gen1_config_channel,
 	.parse_rx_desc = rtl8xxxu_parse_rxdesc16,
+	.parse_phystats = rtl8723au_rx_parse_phystats,
 	.init_aggregation = rtl8xxxu_gen1_init_aggregation,
 	.enable_rf = rtl8xxxu_gen1_enable_rf,
 	.disable_rf = rtl8xxxu_gen1_disable_rf,
@@ -511,6 +510,7 @@ struct rtl8xxxu_fileops rtl8723au_fops = {
 	.rx_agg_buf_size = 16000,
 	.tx_desc_size = sizeof(struct rtl8xxxu_txdesc32),
 	.rx_desc_size = sizeof(struct rtl8xxxu_rxdesc16),
+	.max_sec_cam_num = 32,
 	.adda_1t_init = 0x0b1b25a0,
 	.adda_1t_path_on = 0x0bdb25a0,
 	.adda_2t_path_on_a = 0x04db25a4,

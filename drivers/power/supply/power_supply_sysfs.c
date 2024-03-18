@@ -15,6 +15,7 @@
 #include <linux/power_supply.h>
 #include <linux/slab.h>
 #include <linux/stat.h>
+#include <linux/string_helpers.h>
 
 #include "power_supply.h"
 
@@ -221,9 +222,10 @@ static struct power_supply_attr power_supply_attrs[] = {
 	POWER_SUPPLY_ATTR(MANUFACTURER),
 	POWER_SUPPLY_ATTR(SERIAL_NUMBER),
 };
+#define POWER_SUPPLY_ATTR_CNT ARRAY_SIZE(power_supply_attrs)
 
 static struct attribute *
-__power_supply_attrs[ARRAY_SIZE(power_supply_attrs) + 1];
+__power_supply_attrs[POWER_SUPPLY_ATTR_CNT + 1];
 
 static struct power_supply_attr *to_ps_attr(struct device_attribute *attr)
 {
@@ -269,6 +271,23 @@ static ssize_t power_supply_show_usb_type(struct device *dev,
 	return count;
 }
 
+static ssize_t power_supply_show_charge_behaviour(struct device *dev,
+						  struct power_supply *psy,
+						  union power_supply_propval *value,
+						  char *buf)
+{
+	int ret;
+
+	ret = power_supply_get_property(psy,
+					POWER_SUPPLY_PROP_CHARGE_BEHAVIOUR,
+					value);
+	if (ret < 0)
+		return ret;
+
+	return power_supply_charge_behaviour_show(dev, psy->desc->charge_behaviours,
+						  value->intval, buf);
+}
+
 static ssize_t power_supply_show_property(struct device *dev,
 					  struct device_attribute *attr,
 					  char *buf) {
@@ -285,7 +304,8 @@ static ssize_t power_supply_show_property(struct device *dev,
 
 		if (ret < 0) {
 			if (ret == -ENODATA)
-				dev_dbg(dev, "driver has no data for `%s' property\n",
+				dev_dbg_ratelimited(dev,
+					"driver has no data for `%s' property\n",
 					attr->attr.name);
 			else if (ret != -ENODEV && ret != -EAGAIN)
 				dev_err_ratelimited(dev,
@@ -295,21 +315,24 @@ static ssize_t power_supply_show_property(struct device *dev,
 		}
 	}
 
-	if (ps_attr->text_values_len > 0 &&
-	    value.intval < ps_attr->text_values_len && value.intval >= 0) {
-		return sysfs_emit(buf, "%s\n", ps_attr->text_values[value.intval]);
-	}
-
 	switch (psp) {
 	case POWER_SUPPLY_PROP_USB_TYPE:
 		ret = power_supply_show_usb_type(dev, psy->desc,
 						&value, buf);
 		break;
+	case POWER_SUPPLY_PROP_CHARGE_BEHAVIOUR:
+		ret = power_supply_show_charge_behaviour(dev, psy, &value, buf);
+		break;
 	case POWER_SUPPLY_PROP_MODEL_NAME ... POWER_SUPPLY_PROP_SERIAL_NUMBER:
 		ret = sysfs_emit(buf, "%s\n", value.strval);
 		break;
 	default:
-		ret = sysfs_emit(buf, "%d\n", value.intval);
+		if (ps_attr->text_values_len > 0 &&
+				value.intval < ps_attr->text_values_len && value.intval >= 0) {
+			ret = sysfs_emit(buf, "%s\n", ps_attr->text_values[value.intval]);
+		} else {
+			ret = sysfs_emit(buf, "%d\n", value.intval);
+		}
 	}
 
 	return ret;
@@ -380,6 +403,9 @@ static umode_t power_supply_attr_is_visible(struct kobject *kobj,
 		}
 	}
 
+	if (power_supply_battery_info_has_prop(psy->battery_info, attrno))
+		return mode;
+
 	return 0;
 }
 
@@ -388,24 +414,14 @@ static const struct attribute_group power_supply_attr_group = {
 	.is_visible = power_supply_attr_is_visible,
 };
 
-static const struct attribute_group *power_supply_attr_groups[] = {
+const struct attribute_group *power_supply_attr_groups[] = {
 	&power_supply_attr_group,
-	NULL,
+	NULL
 };
 
-static void str_to_lower(char *str)
-{
-	while (*str) {
-		*str = tolower(*str);
-		str++;
-	}
-}
-
-void power_supply_init_attrs(struct device_type *dev_type)
+void power_supply_init_attrs(void)
 {
 	int i;
-
-	dev_type->groups = power_supply_attr_groups;
 
 	for (i = 0; i < ARRAY_SIZE(power_supply_attrs); i++) {
 		struct device_attribute *attr;
@@ -415,7 +431,8 @@ void power_supply_init_attrs(struct device_type *dev_type)
 				__func__, i);
 			sprintf(power_supply_attrs[i].attr_name, "_err_%d", i);
 		} else {
-			str_to_lower(power_supply_attrs[i].attr_name);
+			string_lower(power_supply_attrs[i].attr_name,
+				     power_supply_attrs[i].attr_name);
 		}
 
 		attr = &power_supply_attrs[i].dev_attr;
@@ -461,6 +478,10 @@ static int add_prop_uevent(const struct device *dev, struct kobj_uevent_env *env
 int power_supply_uevent(const struct device *dev, struct kobj_uevent_env *env)
 {
 	const struct power_supply *psy = dev_get_drvdata(dev);
+	const enum power_supply_property *battery_props =
+		power_supply_battery_info_properties;
+	unsigned long psy_drv_properties[POWER_SUPPLY_ATTR_CNT /
+					 sizeof(unsigned long) + 1] = {0};
 	int ret = 0, j;
 	char *prop_buf;
 
@@ -473,6 +494,13 @@ int power_supply_uevent(const struct device *dev, struct kobj_uevent_env *env)
 	if (ret)
 		return ret;
 
+	/*
+	 * Kernel generates KOBJ_REMOVE uevent in device removal path, after
+	 * resources have been freed. Exit early to avoid use-after-free.
+	 */
+	if (psy->removing)
+		return 0;
+
 	prop_buf = (char *)get_zeroed_page(GFP_KERNEL);
 	if (!prop_buf)
 		return -ENOMEM;
@@ -482,8 +510,21 @@ int power_supply_uevent(const struct device *dev, struct kobj_uevent_env *env)
 		goto out;
 
 	for (j = 0; j < psy->desc->num_properties; j++) {
+		set_bit(psy->desc->properties[j], psy_drv_properties);
 		ret = add_prop_uevent(dev, env, psy->desc->properties[j],
 				      prop_buf);
+		if (ret)
+			goto out;
+	}
+
+	for (j = 0; j < power_supply_battery_info_properties_size; j++) {
+		if (test_bit(battery_props[j], psy_drv_properties))
+			continue;
+		if (!power_supply_battery_info_has_prop(psy->battery_info,
+				battery_props[j]))
+			continue;
+		ret = add_prop_uevent(dev, env, battery_props[j],
+			      prop_buf);
 		if (ret)
 			goto out;
 	}

@@ -14,8 +14,14 @@ KBUILD_AFLAGS_MODULE += -fPIC
 KBUILD_CFLAGS_MODULE += -fPIC
 KBUILD_AFLAGS	+= -m64
 KBUILD_CFLAGS	+= -m64
+ifdef CONFIG_PIE_BUILD
 KBUILD_CFLAGS	+= -fPIE
-LDFLAGS_vmlinux	:= -pie
+LDFLAGS_vmlinux	:= -pie -z notext
+else
+KBUILD_CFLAGS	+= $(call cc-option,-munaligned-symbols,)
+LDFLAGS_vmlinux	:= --emit-relocs --discard-none
+extra_tools	:= relocs
+endif
 aflags_dwarf	:= -Wa,-gdwarf-2
 KBUILD_AFLAGS_DECOMPRESSOR := $(CLANG_FLAGS) -m64 -D__ASSEMBLY__
 ifndef CONFIG_AS_IS_LLVM
@@ -27,6 +33,7 @@ KBUILD_CFLAGS_DECOMPRESSOR += -fno-delete-null-pointer-checks -msoft-float -mbac
 KBUILD_CFLAGS_DECOMPRESSOR += -fno-asynchronous-unwind-tables
 KBUILD_CFLAGS_DECOMPRESSOR += -ffreestanding
 KBUILD_CFLAGS_DECOMPRESSOR += -fno-stack-protector
+KBUILD_CFLAGS_DECOMPRESSOR += -fPIE
 KBUILD_CFLAGS_DECOMPRESSOR += $(call cc-disable-warning, address-of-packed-member)
 KBUILD_CFLAGS_DECOMPRESSOR += $(if $(CONFIG_DEBUG_INFO),-g)
 KBUILD_CFLAGS_DECOMPRESSOR += $(if $(CONFIG_DEBUG_INFO_DWARF4), $(call cc-option, -gdwarf-4,))
@@ -118,7 +125,6 @@ export KBUILD_CFLAGS_DECOMPRESSOR
 OBJCOPYFLAGS	:= -O binary
 
 libs-y		+= arch/s390/lib/
-drivers-y	+= drivers/s390/
 
 boot		:= arch/s390/boot
 syscalls	:= arch/s390/kernel/syscalls
@@ -138,15 +144,12 @@ bzImage: vmlinux
 zfcpdump:
 	$(Q)$(MAKE) $(build)=$(boot) $(boot)/$@
 
-vdso_install:
-	$(Q)$(MAKE) $(build)=arch/$(ARCH)/kernel/vdso64 $@
-
 archheaders:
 	$(Q)$(MAKE) $(build)=$(syscalls) uapi
 
 archprepare:
 	$(Q)$(MAKE) $(build)=$(syscalls) kapi
-	$(Q)$(MAKE) $(build)=$(tools) kapi
+	$(Q)$(MAKE) $(build)=$(tools) kapi $(extra_tools)
 ifeq ($(KBUILD_EXTMOD),)
 # We need to generate vdso-offsets.h before compiling certain files in kernel/.
 # In order to do that, we should use the archprepare target, but we can't since
@@ -159,6 +162,9 @@ vdso_prepare: prepare0
 	$(Q)$(MAKE) $(build)=arch/s390/kernel/vdso64 include/generated/vdso64-offsets.h
 	$(if $(CONFIG_COMPAT),$(Q)$(MAKE) \
 		$(build)=arch/s390/kernel/vdso32 include/generated/vdso32-offsets.h)
+
+vdso-install-y			+= arch/s390/kernel/vdso64/vdso64.so.dbg
+vdso-install-$(CONFIG_COMPAT)	+= arch/s390/kernel/vdso32/vdso32.so.dbg
 
 ifdef CONFIG_EXPOLINE_EXTERN
 modules_prepare: expoline_prepare

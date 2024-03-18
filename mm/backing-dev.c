@@ -16,11 +16,11 @@
 #include <linux/writeback.h>
 #include <linux/device.h>
 #include <trace/events/writeback.h>
+#include "internal.h"
 
 struct backing_dev_info noop_backing_dev_info;
 EXPORT_SYMBOL_GPL(noop_backing_dev_info);
 
-static struct class *bdi_class;
 static const char *bdi_unknown_name = "(unknown)";
 
 /*
@@ -34,8 +34,6 @@ LIST_HEAD(bdi_list);
 
 /* bdi_wq serves all asynchronous writeback tasks */
 struct workqueue_struct *bdi_wq;
-
-#define K(x) ((x) << (PAGE_SHIFT - 10))
 
 #ifdef CONFIG_DEBUG_FS
 #include <linux/debugfs.h>
@@ -263,7 +261,7 @@ static ssize_t min_bytes_store(struct device *dev,
 
 	return ret;
 }
-DEVICE_ATTR_RW(min_bytes);
+static DEVICE_ATTR_RW(min_bytes);
 
 static ssize_t max_bytes_show(struct device *dev,
 			      struct device_attribute *attr,
@@ -291,7 +289,7 @@ static ssize_t max_bytes_store(struct device *dev,
 
 	return ret;
 }
-DEVICE_ATTR_RW(max_bytes);
+static DEVICE_ATTR_RW(max_bytes);
 
 static ssize_t stable_pages_required_show(struct device *dev,
 					  struct device_attribute *attr,
@@ -345,13 +343,19 @@ static struct attribute *bdi_dev_attrs[] = {
 };
 ATTRIBUTE_GROUPS(bdi_dev);
 
+static const struct class bdi_class = {
+	.name		= "bdi",
+	.dev_groups	= bdi_dev_groups,
+};
+
 static __init int bdi_class_init(void)
 {
-	bdi_class = class_create(THIS_MODULE, "bdi");
-	if (IS_ERR(bdi_class))
-		return PTR_ERR(bdi_class);
+	int ret;
 
-	bdi_class->dev_groups = bdi_dev_groups;
+	ret = class_register(&bdi_class);
+	if (ret)
+		return ret;
+
 	bdi_debug_init();
 
 	return 0;
@@ -367,31 +371,6 @@ static int __init default_bdi_init(void)
 	return 0;
 }
 subsys_initcall(default_bdi_init);
-
-/*
- * This function is used when the first inode for this wb is marked dirty. It
- * wakes-up the corresponding bdi thread which should then take care of the
- * periodic background write-out of dirty inodes. Since the write-out would
- * starts only 'dirty_writeback_interval' centisecs from now anyway, we just
- * set up a timer which wakes the bdi thread up later.
- *
- * Note, we wouldn't bother setting up the timer, but this function is on the
- * fast-path (used by '__mark_inode_dirty()'), so we save few context switches
- * by delaying the wake-up.
- *
- * We have to be careful not to postpone flush work if it is scheduled for
- * earlier. Thus we use queue_delayed_work().
- */
-void wb_wakeup_delayed(struct bdi_writeback *wb)
-{
-	unsigned long timeout;
-
-	timeout = msecs_to_jiffies(dirty_writeback_interval * 10);
-	spin_lock_irq(&wb->work_lock);
-	if (test_bit(WB_registered, &wb->state))
-		queue_delayed_work(bdi_wq, &wb->dwork, timeout);
-	spin_unlock_irq(&wb->work_lock);
-}
 
 static void wb_update_bandwidth_workfn(struct work_struct *work)
 {
@@ -432,7 +411,6 @@ static int wb_init(struct bdi_writeback *wb, struct backing_dev_info *bdi,
 	INIT_LIST_HEAD(&wb->work_list);
 	INIT_DELAYED_WORK(&wb->dwork, wb_workfn);
 	INIT_DELAYED_WORK(&wb->bw_dwork, wb_update_bandwidth_workfn);
-	wb->dirty_sleep = jiffies;
 
 	err = fprop_local_init_percpu(&wb->completions, gfp);
 	if (err)
@@ -507,6 +485,15 @@ static LIST_HEAD(offline_cgwbs);
 static void cleanup_offline_cgwbs_workfn(struct work_struct *work);
 static DECLARE_WORK(cleanup_offline_cgwbs_work, cleanup_offline_cgwbs_workfn);
 
+static void cgwb_free_rcu(struct rcu_head *rcu_head)
+{
+	struct bdi_writeback *wb = container_of(rcu_head,
+			struct bdi_writeback, rcu);
+
+	percpu_ref_exit(&wb->refcnt);
+	kfree(wb);
+}
+
 static void cgwb_release_workfn(struct work_struct *work)
 {
 	struct bdi_writeback *wb = container_of(work, struct bdi_writeback,
@@ -529,11 +516,10 @@ static void cgwb_release_workfn(struct work_struct *work)
 	list_del(&wb->offline_node);
 	spin_unlock_irq(&cgwb_lock);
 
-	percpu_ref_exit(&wb->refcnt);
 	wb_exit(wb);
 	bdi_put(bdi);
 	WARN_ON_ONCE(!list_empty(&wb->b_attached));
-	kfree_rcu(wb, rcu);
+	call_rcu(&wb->rcu, cgwb_free_rcu);
 }
 
 static void cgwb_release(struct percpu_ref *refcnt)
@@ -719,9 +705,6 @@ struct bdi_writeback *wb_get_create(struct backing_dev_info *bdi,
 	struct bdi_writeback *wb;
 
 	might_alloc(gfp);
-
-	if (!memcg_css->parent)
-		return &bdi->wb;
 
 	do {
 		wb = wb_get_lookup(bdi, memcg_css);
@@ -912,6 +895,7 @@ int bdi_init(struct backing_dev_info *bdi)
 	INIT_LIST_HEAD(&bdi->bdi_list);
 	INIT_LIST_HEAD(&bdi->wb_list);
 	init_waitqueue_head(&bdi->wb_waitq);
+	bdi->last_bdp_sleep = jiffies;
 
 	return cgwb_bdi_init(bdi);
 }
@@ -993,7 +977,7 @@ int bdi_register_va(struct backing_dev_info *bdi, const char *fmt, va_list args)
 		return 0;
 
 	vsnprintf(bdi->dev_name, sizeof(bdi->dev_name), fmt, args);
-	dev = device_create(bdi_class, NULL, MKDEV(0, 0), bdi, bdi->dev_name);
+	dev = device_create(&bdi_class, NULL, MKDEV(0, 0), bdi, bdi->dev_name);
 	if (IS_ERR(dev))
 		return PTR_ERR(dev);
 

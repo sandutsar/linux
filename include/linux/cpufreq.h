@@ -15,11 +15,11 @@
 #include <linux/kobject.h>
 #include <linux/notifier.h>
 #include <linux/of.h>
-#include <linux/of_device.h>
 #include <linux/pm_opp.h>
 #include <linux/pm_qos.h>
 #include <linux/spinlock.h>
 #include <linux/sysfs.h>
+#include <linux/minmax.h>
 
 /*********************************************************************
  *                        CPUFREQ INTERFACE                          *
@@ -141,6 +141,9 @@ struct cpufreq_policy {
 	 */
 	bool			dvfs_possible_from_any_cpu;
 
+	/* Per policy boost enabled flag. */
+	bool			boost_enabled;
+
 	 /* Cached frequency lookup from cpufreq_driver_resolve_freq. */
 	unsigned int cached_target_freq;
 	unsigned int cached_resolved_idx;
@@ -237,6 +240,7 @@ bool cpufreq_supports_freq_invariance(void);
 struct kobject *get_governor_parent_kobj(struct cpufreq_policy *policy);
 void cpufreq_enable_fast_switch(struct cpufreq_policy *policy);
 void cpufreq_disable_fast_switch(struct cpufreq_policy *policy);
+bool has_target_index(void);
 #else
 static inline unsigned int cpufreq_get(unsigned int cpu)
 {
@@ -259,6 +263,7 @@ static inline bool cpufreq_supports_freq_invariance(void)
 	return false;
 }
 static inline void disable_cpufreq(void) { }
+static inline void cpufreq_update_limits(unsigned int cpu) { }
 #endif
 
 #ifdef CONFIG_CPU_FREQ_STAT
@@ -340,7 +345,10 @@ struct cpufreq_driver {
 	/*
 	 * ->fast_switch() replacement for drivers that use an internal
 	 * representation of performance levels and can pass hints other than
-	 * the target performance level to the hardware.
+	 * the target performance level to the hardware. This can only be set
+	 * if ->fast_switch is set too, because in those cases (under specific
+	 * conditions) scale invariance can be disabled, which causes the
+	 * schedutil governor to fall back to the latter.
 	 */
 	void		(*adjust_perf)(unsigned int cpu,
 				       unsigned long min_perf,
@@ -367,7 +375,7 @@ struct cpufreq_driver {
 	int		(*target_intermediate)(struct cpufreq_policy *policy,
 					       unsigned int index);
 
-	/* should be defined, if possible */
+	/* should be defined, if possible, return 0 on error */
 	unsigned int	(*get)(unsigned int cpu);
 
 	/* Called to update policy limits on firmware notifications. */
@@ -464,17 +472,8 @@ static inline void cpufreq_verify_within_limits(struct cpufreq_policy_data *poli
 						unsigned int min,
 						unsigned int max)
 {
-	if (policy->min < min)
-		policy->min = min;
-	if (policy->max < min)
-		policy->max = min;
-	if (policy->min > max)
-		policy->min = max;
-	if (policy->max > max)
-		policy->max = max;
-	if (policy->min > policy->max)
-		policy->min = policy->max;
-	return;
+	policy->max = clamp(policy->max, min, max);
+	policy->min = clamp(policy->min, min, policy->max);
 }
 
 static inline void
@@ -570,9 +569,7 @@ static inline unsigned long cpufreq_scale(unsigned long old, u_int div,
 
 /*
  * The polling frequency depends on the capability of the processor. Default
- * polling frequency is 1000 times the transition latency of the processor. The
- * ondemand governor will work on any processor with transition latency <= 10ms,
- * using appropriate sampling rate.
+ * polling frequency is 1000 times the transition latency of the processor.
  */
 #define LATENCY_MULTIPLIER		(1000)
 
@@ -695,26 +692,6 @@ struct cpufreq_frequency_table {
 	unsigned int	frequency; /* kHz - doesn't need to be in ascending
 				    * order */
 };
-
-#if defined(CONFIG_CPU_FREQ) && defined(CONFIG_PM_OPP)
-int dev_pm_opp_init_cpufreq_table(struct device *dev,
-				  struct cpufreq_frequency_table **table);
-void dev_pm_opp_free_cpufreq_table(struct device *dev,
-				   struct cpufreq_frequency_table **table);
-#else
-static inline int dev_pm_opp_init_cpufreq_table(struct device *dev,
-						struct cpufreq_frequency_table
-						**table)
-{
-	return -EINVAL;
-}
-
-static inline void dev_pm_opp_free_cpufreq_table(struct device *dev,
-						 struct cpufreq_frequency_table
-						 **table)
-{
-}
-#endif
 
 /*
  * cpufreq_for_each_entry -	iterate over a cpufreq_frequency_table
@@ -1023,6 +1000,18 @@ static inline int cpufreq_table_find_index_c(struct cpufreq_policy *policy,
 						   efficiencies);
 }
 
+static inline bool cpufreq_is_in_limits(struct cpufreq_policy *policy, int idx)
+{
+	unsigned int freq;
+
+	if (idx < 0)
+		return false;
+
+	freq = policy->freq_table[idx].frequency;
+
+	return freq == clamp_val(freq, policy->min, policy->max);
+}
+
 static inline int cpufreq_frequency_table_target(struct cpufreq_policy *policy,
 						 unsigned int target_freq,
 						 unsigned int relation)
@@ -1056,7 +1045,8 @@ retry:
 		return 0;
 	}
 
-	if (idx < 0 && efficiencies) {
+	/* Limit frequency index to honor policy->min/max */
+	if (!cpufreq_is_in_limits(policy, idx) && efficiencies) {
 		efficiencies = false;
 		goto retry;
 	}
@@ -1195,14 +1185,6 @@ static inline int of_perf_domain_get_sharing_cpumask(int pcpu, const char *list_
 }
 #endif
 
-#if defined(CONFIG_ENERGY_MODEL) && defined(CONFIG_CPU_FREQ_GOV_SCHEDUTIL)
-void sched_cpufreq_governor_change(struct cpufreq_policy *policy,
-			struct cpufreq_governor *old_gov);
-#else
-static inline void sched_cpufreq_governor_change(struct cpufreq_policy *policy,
-			struct cpufreq_governor *old_gov) { }
-#endif
-
 extern unsigned int arch_freq_get_on_cpu(int cpu);
 
 #ifndef arch_set_freq_scale
@@ -1213,6 +1195,7 @@ void arch_set_freq_scale(const struct cpumask *cpus,
 {
 }
 #endif
+
 /* the following are really really optional */
 extern struct freq_attr cpufreq_freq_attr_scaling_available_freqs;
 extern struct freq_attr cpufreq_freq_attr_scaling_boost_freqs;

@@ -259,6 +259,8 @@ static void tmio_mmc_reset_work(struct work_struct *work)
 	else
 		mrq->cmd->error = -ETIMEDOUT;
 
+	/* No new calls yet, but disallow concurrent tmio_mmc_done_work() */
+	host->mrq = ERR_PTR(-EBUSY);
 	host->cmd = NULL;
 	host->data = NULL;
 
@@ -970,6 +972,7 @@ static void tmio_mmc_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 		return;
 	}
 
+	/* Disallow new mrqs and work handlers to run */
 	host->mrq = ERR_PTR(-EBUSY);
 
 	spin_unlock_irqrestore(&host->lock, flags);
@@ -1004,8 +1007,9 @@ static void tmio_mmc_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 			"%s.%d: IOS interrupted: clk %u, mode %u",
 			current->comm, task_pid_nr(current),
 			ios->clock, ios->power_mode);
-	host->mrq = NULL;
 
+	/* Ready for new mrqs */
+	host->mrq = NULL;
 	host->clk_cache = ios->clock;
 
 	mutex_unlock(&host->ios_lock);
@@ -1084,7 +1088,7 @@ static void tmio_mmc_of_parse(struct platform_device *pdev,
 	 * For new platforms, please use "disable-wp" instead of
 	 * "toshiba,mmc-wrprotect-disable"
 	 */
-	if (of_get_property(np, "toshiba,mmc-wrprotect-disable", NULL))
+	if (of_property_read_bool(np, "toshiba,mmc-wrprotect-disable"))
 		mmc->caps2 |= MMC_CAP2_NO_WRITE_PROTECT;
 }
 

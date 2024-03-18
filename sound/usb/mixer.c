@@ -1204,6 +1204,13 @@ static void volume_control_quirks(struct usb_mixer_elem_info *cval,
 			cval->res = 16;
 		}
 		break;
+	case USB_ID(0x1bcf, 0x2283): /* NexiGo N930AF FHD Webcam */
+		if (!strcmp(kctl->id.name, "Mic Capture Volume")) {
+			usb_audio_info(chip,
+				"set resolution quirk: cval->res = 16\n");
+			cval->res = 16;
+		}
+		break;
 	}
 }
 
@@ -1645,6 +1652,34 @@ static const struct usb_feature_control_info *get_feature_control_info(int contr
 	return NULL;
 }
 
+static int feature_unit_mutevol_ctl_name(struct usb_mixer_interface *mixer,
+					 struct snd_kcontrol *kctl,
+					 struct usb_audio_term *iterm,
+					 struct usb_audio_term *oterm)
+{
+	struct usb_audio_term *aterm, *bterm;
+	bool output_first;
+	int len = 0;
+
+	/*
+	 * If the input terminal is USB Streaming, we try getting the name of
+	 * the output terminal first in hopes of getting something more
+	 * descriptive than "PCM".
+	 */
+	output_first = iterm && !(iterm->type >> 16) && (iterm->type & 0xff00) == 0x0100;
+
+	aterm = output_first ? oterm : iterm;
+	bterm = output_first ? iterm : oterm;
+
+	if (aterm)
+		len = get_term_name(mixer->chip, aterm, kctl->id.name,
+				    sizeof(kctl->id.name), 1);
+	if (!len && bterm)
+		len = get_term_name(mixer->chip, bterm, kctl->id.name,
+				    sizeof(kctl->id.name), 1);
+	return len;
+}
+
 static void __build_feature_ctl(struct usb_mixer_interface *mixer,
 				const struct usbmix_name_map *imap,
 				unsigned int ctl_mask, int control,
@@ -1726,22 +1761,15 @@ static void __build_feature_ctl(struct usb_mixer_interface *mixer,
 	case UAC_FU_MUTE:
 	case UAC_FU_VOLUME:
 		/*
-		 * determine the control name.  the rule is:
-		 * - if a name id is given in descriptor, use it.
-		 * - if the connected input can be determined, then use the name
-		 *   of terminal type.
-		 * - if the connected output can be determined, use it.
-		 * - otherwise, anonymous name.
+		 * Determine the control name:
+		 * - If a name id is given in descriptor, use it.
+		 * - If input and output terminals are present, try to derive
+		 *   the name from either of these.
+		 * - Otherwise, make up a name using the feature unit ID.
 		 */
 		if (!len) {
-			if (iterm)
-				len = get_term_name(mixer->chip, iterm,
-						    kctl->id.name,
-						    sizeof(kctl->id.name), 1);
-			if (!len && oterm)
-				len = get_term_name(mixer->chip, oterm,
-						    kctl->id.name,
-						    sizeof(kctl->id.name), 1);
+			len = feature_unit_mutevol_ctl_name(mixer, kctl, iterm,
+							    oterm);
 			if (!len)
 				snprintf(kctl->id.name, sizeof(kctl->id.name),
 					 "Feature %d", unitid);
@@ -1929,7 +1957,6 @@ static int parse_clock_source_unit(struct mixer_build *state, int unitid,
 	struct uac_clock_source_descriptor *hdr = _ftr;
 	struct usb_mixer_elem_info *cval;
 	struct snd_kcontrol *kctl;
-	char name[SNDRV_CTL_ELEM_ID_NAME_MAXLEN];
 	int ret;
 
 	if (state->mixer->protocol != UAC_VERSION_2)
@@ -1966,10 +1993,9 @@ static int parse_clock_source_unit(struct mixer_build *state, int unitid,
 
 	kctl->private_free = snd_usb_mixer_elem_free;
 	ret = snd_usb_copy_string_desc(state->chip, hdr->iClockSource,
-				       name, sizeof(name));
+				       kctl->id.name, sizeof(kctl->id.name));
 	if (ret > 0)
-		snprintf(kctl->id.name, sizeof(kctl->id.name),
-			 "%s Validity", name);
+		append_ctl_name(kctl, " Validity");
 	else
 		snprintf(kctl->id.name, sizeof(kctl->id.name),
 			 "Clock Source %d Validity", hdr->bClockID);

@@ -1,7 +1,7 @@
-// SPDX-License-Identifier: GPL-2.0+
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
- * Copyright (C) 2017 Oracle.  All Rights Reserved.
- * Author: Darrick J. Wong <darrick.wong@oracle.com>
+ * Copyright (C) 2017-2023 Oracle.  All Rights Reserved.
+ * Author: Darrick J. Wong <djwong@kernel.org>
  */
 #include "xfs.h"
 #include "xfs_fs.h"
@@ -17,6 +17,15 @@
 #include "xfs_ag.h"
 #include "scrub/scrub.h"
 #include "scrub/common.h"
+
+int
+xchk_setup_agheader(
+	struct xfs_scrub	*sc)
+{
+	if (xchk_need_intent_drain(sc))
+		xchk_fsgates_enable(sc, XCHK_FSGATES_DRAIN);
+	return xchk_setup_fs(sc);
+}
 
 /* Superblock */
 
@@ -42,8 +51,9 @@ xchk_superblock_xref(
 
 	xchk_xref_is_used_space(sc, agbno, 1);
 	xchk_xref_is_not_inode_chunk(sc, agbno, 1);
-	xchk_xref_is_owned_by(sc, agbno, 1, &XFS_RMAP_OINFO_FS);
+	xchk_xref_is_only_owned_by(sc, agbno, 1, &XFS_RMAP_OINFO_FS);
 	xchk_xref_is_not_shared(sc, agbno, 1);
+	xchk_xref_is_not_cow_staging(sc, agbno, 1);
 
 	/* scrub teardown will take care of sc->sa for us */
 }
@@ -505,9 +515,10 @@ xchk_agf_xref(
 	xchk_agf_xref_freeblks(sc);
 	xchk_agf_xref_cntbt(sc);
 	xchk_xref_is_not_inode_chunk(sc, agbno, 1);
-	xchk_xref_is_owned_by(sc, agbno, 1, &XFS_RMAP_OINFO_FS);
+	xchk_xref_is_only_owned_by(sc, agbno, 1, &XFS_RMAP_OINFO_FS);
 	xchk_agf_xref_btreeblks(sc);
 	xchk_xref_is_not_shared(sc, agbno, 1);
+	xchk_xref_is_not_cow_staging(sc, agbno, 1);
 	xchk_agf_xref_refcblks(sc);
 
 	/* scrub teardown will take care of sc->sa for us */
@@ -545,28 +556,28 @@ xchk_agf(
 		xchk_block_set_corrupt(sc, sc->sa.agf_bp);
 
 	/* Check the AGF btree roots and levels */
-	agbno = be32_to_cpu(agf->agf_roots[XFS_BTNUM_BNO]);
+	agbno = be32_to_cpu(agf->agf_bno_root);
 	if (!xfs_verify_agbno(pag, agbno))
 		xchk_block_set_corrupt(sc, sc->sa.agf_bp);
 
-	agbno = be32_to_cpu(agf->agf_roots[XFS_BTNUM_CNT]);
+	agbno = be32_to_cpu(agf->agf_cnt_root);
 	if (!xfs_verify_agbno(pag, agbno))
 		xchk_block_set_corrupt(sc, sc->sa.agf_bp);
 
-	level = be32_to_cpu(agf->agf_levels[XFS_BTNUM_BNO]);
+	level = be32_to_cpu(agf->agf_bno_level);
 	if (level <= 0 || level > mp->m_alloc_maxlevels)
 		xchk_block_set_corrupt(sc, sc->sa.agf_bp);
 
-	level = be32_to_cpu(agf->agf_levels[XFS_BTNUM_CNT]);
+	level = be32_to_cpu(agf->agf_cnt_level);
 	if (level <= 0 || level > mp->m_alloc_maxlevels)
 		xchk_block_set_corrupt(sc, sc->sa.agf_bp);
 
 	if (xfs_has_rmapbt(mp)) {
-		agbno = be32_to_cpu(agf->agf_roots[XFS_BTNUM_RMAP]);
+		agbno = be32_to_cpu(agf->agf_rmap_root);
 		if (!xfs_verify_agbno(pag, agbno))
 			xchk_block_set_corrupt(sc, sc->sa.agf_bp);
 
-		level = be32_to_cpu(agf->agf_levels[XFS_BTNUM_RMAP]);
+		level = be32_to_cpu(agf->agf_rmap_level);
 		if (level <= 0 || level > mp->m_rmap_maxlevels)
 			xchk_block_set_corrupt(sc, sc->sa.agf_bp);
 	}
@@ -633,8 +644,9 @@ xchk_agfl_block_xref(
 
 	xchk_xref_is_used_space(sc, agbno, 1);
 	xchk_xref_is_not_inode_chunk(sc, agbno, 1);
-	xchk_xref_is_owned_by(sc, agbno, 1, &XFS_RMAP_OINFO_AG);
+	xchk_xref_is_only_owned_by(sc, agbno, 1, &XFS_RMAP_OINFO_AG);
 	xchk_xref_is_not_shared(sc, agbno, 1);
+	xchk_xref_is_not_cow_staging(sc, agbno, 1);
 }
 
 /* Scrub an AGFL block. */
@@ -689,8 +701,9 @@ xchk_agfl_xref(
 
 	xchk_xref_is_used_space(sc, agbno, 1);
 	xchk_xref_is_not_inode_chunk(sc, agbno, 1);
-	xchk_xref_is_owned_by(sc, agbno, 1, &XFS_RMAP_OINFO_FS);
+	xchk_xref_is_only_owned_by(sc, agbno, 1, &XFS_RMAP_OINFO_FS);
 	xchk_xref_is_not_shared(sc, agbno, 1);
+	xchk_xref_is_not_cow_staging(sc, agbno, 1);
 
 	/*
 	 * Scrub teardown will take care of sc->sa for us.  Leave sc->sa
@@ -844,8 +857,9 @@ xchk_agi_xref(
 	xchk_xref_is_used_space(sc, agbno, 1);
 	xchk_xref_is_not_inode_chunk(sc, agbno, 1);
 	xchk_agi_xref_icounts(sc);
-	xchk_xref_is_owned_by(sc, agbno, 1, &XFS_RMAP_OINFO_FS);
+	xchk_xref_is_only_owned_by(sc, agbno, 1, &XFS_RMAP_OINFO_FS);
 	xchk_xref_is_not_shared(sc, agbno, 1);
+	xchk_xref_is_not_cow_staging(sc, agbno, 1);
 	xchk_agi_xref_fiblocks(sc);
 
 	/* scrub teardown will take care of sc->sa for us */

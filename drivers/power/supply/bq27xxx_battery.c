@@ -1083,10 +1083,8 @@ static int poll_interval_param_set(const char *val, const struct kernel_param *k
 		return ret;
 
 	mutex_lock(&bq27xxx_list_lock);
-	list_for_each_entry(di, &bq27xxx_battery_devices, list) {
-		cancel_delayed_work_sync(&di->work);
-		schedule_delayed_work(&di->work, 0);
-	}
+	list_for_each_entry(di, &bq27xxx_battery_devices, list)
+		mod_delayed_work(system_wq, &di->work, 0);
 	mutex_unlock(&bq27xxx_list_lock);
 
 	return ret;
@@ -1597,9 +1595,16 @@ static inline int bq27xxx_battery_read_fcc(struct bq27xxx_device_info *di)
  * Return the Design Capacity in µAh
  * Or < 0 if something fails.
  */
-static int bq27xxx_battery_read_dcap(struct bq27xxx_device_info *di)
+static int bq27xxx_battery_read_dcap(struct bq27xxx_device_info *di,
+				     union power_supply_propval *val)
 {
 	int dcap;
+
+	/* We only have to read charge design full once */
+	if (di->charge_design_full > 0) {
+		val->intval = di->charge_design_full;
+		return 0;
+	}
 
 	if (di->opts & BQ27XXX_O_ZERO)
 		dcap = bq27xxx_read(di, BQ27XXX_REG_DCAP, true);
@@ -1607,7 +1612,7 @@ static int bq27xxx_battery_read_dcap(struct bq27xxx_device_info *di)
 		dcap = bq27xxx_read(di, BQ27XXX_REG_DCAP, false);
 
 	if (dcap < 0) {
-		dev_dbg(di->dev, "error reading initial last measured discharge\n");
+		dev_dbg(di->dev, "error reading design capacity\n");
 		return dcap;
 	}
 
@@ -1616,7 +1621,12 @@ static int bq27xxx_battery_read_dcap(struct bq27xxx_device_info *di)
 	else
 		dcap *= 1000;
 
-	return dcap;
+	/* Save for later reads */
+	di->charge_design_full = dcap;
+
+	val->intval = dcap;
+
+	return 0;
 }
 
 /*
@@ -1761,8 +1771,79 @@ static int bq27xxx_battery_read_health(struct bq27xxx_device_info *di)
 	return POWER_SUPPLY_HEALTH_GOOD;
 }
 
-void bq27xxx_battery_update(struct bq27xxx_device_info *di)
+static bool bq27xxx_battery_is_full(struct bq27xxx_device_info *di, int flags)
 {
+	if (di->opts & BQ27XXX_O_ZERO)
+		return (flags & BQ27000_FLAG_FC);
+	else if (di->opts & BQ27Z561_O_BITS)
+		return (flags & BQ27Z561_FLAG_FC);
+	else
+		return (flags & BQ27XXX_FLAG_FC);
+}
+
+/*
+ * Return the battery average current in µA and the status
+ * Note that current can be negative signed as well
+ * Or 0 if something fails.
+ */
+static int bq27xxx_battery_current_and_status(
+	struct bq27xxx_device_info *di,
+	union power_supply_propval *val_curr,
+	union power_supply_propval *val_status,
+	struct bq27xxx_reg_cache *cache)
+{
+	bool single_flags = (di->opts & BQ27XXX_O_ZERO);
+	int curr;
+	int flags;
+
+	curr = bq27xxx_read(di, BQ27XXX_REG_AI, false);
+	if (curr < 0) {
+		dev_err(di->dev, "error reading current\n");
+		return curr;
+	}
+
+	if (cache) {
+		flags = cache->flags;
+	} else {
+		flags = bq27xxx_read(di, BQ27XXX_REG_FLAGS, single_flags);
+		if (flags < 0) {
+			dev_err(di->dev, "error reading flags\n");
+			return flags;
+		}
+	}
+
+	if (di->opts & BQ27XXX_O_ZERO) {
+		if (!(flags & BQ27000_FLAG_CHGS)) {
+			dev_dbg(di->dev, "negative current!\n");
+			curr = -curr;
+		}
+
+		curr = curr * BQ27XXX_CURRENT_CONSTANT / BQ27XXX_RS;
+	} else {
+		/* Other gauges return signed value */
+		curr = (int)((s16)curr) * 1000;
+	}
+
+	if (val_curr)
+		val_curr->intval = curr;
+
+	if (val_status) {
+		if (bq27xxx_battery_is_full(di, flags))
+			val_status->intval = POWER_SUPPLY_STATUS_FULL;
+		else if (curr > 0)
+			val_status->intval = POWER_SUPPLY_STATUS_CHARGING;
+		else if (curr < 0)
+			val_status->intval = POWER_SUPPLY_STATUS_DISCHARGING;
+		else
+			val_status->intval = POWER_SUPPLY_STATUS_NOT_CHARGING;
+	}
+
+	return 0;
+}
+
+static void bq27xxx_battery_update_unlocked(struct bq27xxx_device_info *di)
+{
+	union power_supply_propval status = di->last_status;
 	struct bq27xxx_reg_cache cache = {0, };
 	bool has_singe_flag = di->opts & BQ27XXX_O_ZERO;
 
@@ -1787,19 +1868,35 @@ void bq27xxx_battery_update(struct bq27xxx_device_info *di)
 		if (di->regs[BQ27XXX_REG_CYCT] != INVALID_REG_ADDR)
 			cache.cycle_count = bq27xxx_battery_read_cyct(di);
 
-		/* We only have to read charge design full once */
-		if (di->charge_design_full <= 0)
-			di->charge_design_full = bq27xxx_battery_read_dcap(di);
+		/*
+		 * On gauges with signed current reporting the current must be
+		 * checked to detect charging <-> discharging status changes.
+		 */
+		if (!(di->opts & BQ27XXX_O_ZERO))
+			bq27xxx_battery_current_and_status(di, NULL, &status, &cache);
 	}
 
 	if ((di->cache.capacity != cache.capacity) ||
-	    (di->cache.flags != cache.flags))
+	    (di->cache.flags != cache.flags) ||
+	    (di->last_status.intval != status.intval)) {
+		di->last_status.intval = status.intval;
 		power_supply_changed(di->bat);
+	}
 
 	if (memcmp(&di->cache, &cache, sizeof(cache)) != 0)
 		di->cache = cache;
 
 	di->last_update = jiffies;
+
+	if (!di->removed && poll_interval > 0)
+		mod_delayed_work(system_wq, &di->work, poll_interval * HZ);
+}
+
+void bq27xxx_battery_update(struct bq27xxx_device_info *di)
+{
+	mutex_lock(&di->lock);
+	bq27xxx_battery_update_unlocked(di);
+	mutex_unlock(&di->lock);
 }
 EXPORT_SYMBOL_GPL(bq27xxx_battery_update);
 
@@ -1810,77 +1907,6 @@ static void bq27xxx_battery_poll(struct work_struct *work)
 				     work.work);
 
 	bq27xxx_battery_update(di);
-
-	if (poll_interval > 0)
-		schedule_delayed_work(&di->work, poll_interval * HZ);
-}
-
-static bool bq27xxx_battery_is_full(struct bq27xxx_device_info *di, int flags)
-{
-	if (di->opts & BQ27XXX_O_ZERO)
-		return (flags & BQ27000_FLAG_FC);
-	else if (di->opts & BQ27Z561_O_BITS)
-		return (flags & BQ27Z561_FLAG_FC);
-	else
-		return (flags & BQ27XXX_FLAG_FC);
-}
-
-/*
- * Return the battery average current in µA and the status
- * Note that current can be negative signed as well
- * Or 0 if something fails.
- */
-static int bq27xxx_battery_current_and_status(
-	struct bq27xxx_device_info *di,
-	union power_supply_propval *val_curr,
-	union power_supply_propval *val_status)
-{
-	bool single_flags = (di->opts & BQ27XXX_O_ZERO);
-	int curr;
-	int flags;
-
-	curr = bq27xxx_read(di, BQ27XXX_REG_AI, false);
-	if (curr < 0) {
-		dev_err(di->dev, "error reading current\n");
-		return curr;
-	}
-
-	flags = bq27xxx_read(di, BQ27XXX_REG_FLAGS, single_flags);
-	if (flags < 0) {
-		dev_err(di->dev, "error reading flags\n");
-		return flags;
-	}
-
-	if (di->opts & BQ27XXX_O_ZERO) {
-		if (!(flags & BQ27000_FLAG_CHGS)) {
-			dev_dbg(di->dev, "negative current!\n");
-			curr = -curr;
-		}
-
-		curr = curr * BQ27XXX_CURRENT_CONSTANT / BQ27XXX_RS;
-	} else {
-		/* Other gauges return signed value */
-		curr = (int)((s16)curr) * 1000;
-	}
-
-	if (val_curr)
-		val_curr->intval = curr;
-
-	if (val_status) {
-		if (curr > 0) {
-			val_status->intval = POWER_SUPPLY_STATUS_CHARGING;
-		} else if (curr < 0) {
-			val_status->intval = POWER_SUPPLY_STATUS_DISCHARGING;
-		} else {
-			if (bq27xxx_battery_is_full(di, flags))
-				val_status->intval = POWER_SUPPLY_STATUS_FULL;
-			else
-				val_status->intval =
-					POWER_SUPPLY_STATUS_NOT_CHARGING;
-		}
-	}
-
-	return 0;
 }
 
 /*
@@ -1985,10 +2011,8 @@ static int bq27xxx_battery_get_property(struct power_supply *psy,
 	struct bq27xxx_device_info *di = power_supply_get_drvdata(psy);
 
 	mutex_lock(&di->lock);
-	if (time_is_before_jiffies(di->last_update + 5 * HZ)) {
-		cancel_delayed_work_sync(&di->work);
-		bq27xxx_battery_poll(&di->work.work);
-	}
+	if (time_is_before_jiffies(di->last_update + 5 * HZ))
+		bq27xxx_battery_update_unlocked(di);
 	mutex_unlock(&di->lock);
 
 	if (psp != POWER_SUPPLY_PROP_PRESENT && di->cache.flags < 0)
@@ -1996,7 +2020,7 @@ static int bq27xxx_battery_get_property(struct power_supply *psy,
 
 	switch (psp) {
 	case POWER_SUPPLY_PROP_STATUS:
-		ret = bq27xxx_battery_current_and_status(di, NULL, val);
+		ret = bq27xxx_battery_current_and_status(di, NULL, val, NULL);
 		break;
 	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
 		ret = bq27xxx_battery_voltage(di, val);
@@ -2005,7 +2029,7 @@ static int bq27xxx_battery_get_property(struct power_supply *psy,
 		val->intval = di->cache.flags < 0 ? 0 : 1;
 		break;
 	case POWER_SUPPLY_PROP_CURRENT_NOW:
-		ret = bq27xxx_battery_current_and_status(di, val, NULL);
+		ret = bq27xxx_battery_current_and_status(di, val, NULL, NULL);
 		break;
 	case POWER_SUPPLY_PROP_CAPACITY:
 		ret = bq27xxx_simple_value(di->cache.capacity, val);
@@ -2043,7 +2067,7 @@ static int bq27xxx_battery_get_property(struct power_supply *psy,
 		ret = bq27xxx_simple_value(di->cache.charge_full, val);
 		break;
 	case POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN:
-		ret = bq27xxx_simple_value(di->charge_design_full, val);
+		ret = bq27xxx_battery_read_dcap(di, val);
 		break;
 	/*
 	 * TODO: Implement these to make registers set from
@@ -2078,8 +2102,15 @@ static void bq27xxx_external_power_changed(struct power_supply *psy)
 {
 	struct bq27xxx_device_info *di = power_supply_get_drvdata(psy);
 
-	cancel_delayed_work_sync(&di->work);
-	schedule_delayed_work(&di->work, 0);
+	/* After charger plug in/out wait 0.5s for things to stabilize */
+	mod_delayed_work(system_wq, &di->work, HZ / 2);
+}
+
+static void bq27xxx_battery_mutex_destroy(void *data)
+{
+	struct mutex *lock = data;
+
+	mutex_destroy(lock);
 }
 
 int bq27xxx_battery_setup(struct bq27xxx_device_info *di)
@@ -2089,9 +2120,14 @@ int bq27xxx_battery_setup(struct bq27xxx_device_info *di)
 		.of_node = di->dev->of_node,
 		.drv_data = di,
 	};
+	int ret;
 
 	INIT_DELAYED_WORK(&di->work, bq27xxx_battery_poll);
 	mutex_init(&di->lock);
+	ret = devm_add_action_or_reset(di->dev, bq27xxx_battery_mutex_destroy,
+				       &di->lock);
+	if (ret)
+		return ret;
 
 	di->regs       = bq27xxx_chip_data[di->chip].regs;
 	di->unseal_key = bq27xxx_chip_data[di->chip].unseal_key;
@@ -2109,7 +2145,7 @@ int bq27xxx_battery_setup(struct bq27xxx_device_info *di)
 	psy_desc->get_property = bq27xxx_battery_get_property;
 	psy_desc->external_power_changed = bq27xxx_external_power_changed;
 
-	di->bat = power_supply_register_no_ws(di->dev, psy_desc, &psy_cfg);
+	di->bat = devm_power_supply_register_no_ws(di->dev, psy_desc, &psy_cfg);
 	if (IS_ERR(di->bat))
 		return dev_err_probe(di->dev, PTR_ERR(di->bat),
 				     "failed to register battery\n");
@@ -2127,25 +2163,40 @@ EXPORT_SYMBOL_GPL(bq27xxx_battery_setup);
 
 void bq27xxx_battery_teardown(struct bq27xxx_device_info *di)
 {
-	/*
-	 * power_supply_unregister call bq27xxx_battery_get_property which
-	 * call bq27xxx_battery_poll.
-	 * Make sure that bq27xxx_battery_poll will not call
-	 * schedule_delayed_work again after unregister (which cause OOPS).
-	 */
-	poll_interval = 0;
-
-	cancel_delayed_work_sync(&di->work);
-
-	power_supply_unregister(di->bat);
-
 	mutex_lock(&bq27xxx_list_lock);
 	list_del(&di->list);
 	mutex_unlock(&bq27xxx_list_lock);
 
-	mutex_destroy(&di->lock);
+	/* Set removed to avoid bq27xxx_battery_update() re-queuing the work */
+	mutex_lock(&di->lock);
+	di->removed = true;
+	mutex_unlock(&di->lock);
+
+	cancel_delayed_work_sync(&di->work);
 }
 EXPORT_SYMBOL_GPL(bq27xxx_battery_teardown);
+
+#ifdef CONFIG_PM_SLEEP
+static int bq27xxx_battery_suspend(struct device *dev)
+{
+	struct bq27xxx_device_info *di = dev_get_drvdata(dev);
+
+	cancel_delayed_work(&di->work);
+	return 0;
+}
+
+static int bq27xxx_battery_resume(struct device *dev)
+{
+	struct bq27xxx_device_info *di = dev_get_drvdata(dev);
+
+	schedule_delayed_work(&di->work, 0);
+	return 0;
+}
+#endif /* CONFIG_PM_SLEEP */
+
+SIMPLE_DEV_PM_OPS(bq27xxx_battery_battery_pm_ops,
+		  bq27xxx_battery_suspend, bq27xxx_battery_resume);
+EXPORT_SYMBOL_GPL(bq27xxx_battery_battery_pm_ops);
 
 MODULE_AUTHOR("Rodolfo Giometti <giometti@linux.it>");
 MODULE_DESCRIPTION("BQ27xxx battery monitor driver");

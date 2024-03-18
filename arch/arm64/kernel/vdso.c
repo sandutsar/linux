@@ -69,10 +69,7 @@ static struct vdso_abi_info vdso_info[] __ro_after_init = {
 /*
  * The vDSO data page.
  */
-static union {
-	struct vdso_data	data[CS_BASES];
-	u8			page[PAGE_SIZE];
-} vdso_data_store __page_aligned_data;
+static union vdso_data_store vdso_data_store __page_aligned_data;
 struct vdso_data *vdso_data = vdso_data_store.data;
 
 static int vdso_mremap(const struct vm_special_mapping *sm,
@@ -212,7 +209,7 @@ static int __setup_additional_pages(enum vdso_abi abi,
 	if (IS_ERR(ret))
 		goto up_fail;
 
-	if (IS_ENABLED(CONFIG_ARM64_BTI_KERNEL) && system_supports_bti())
+	if (system_supports_bti_kernel())
 		gp_flags = VM_ARM64_BTI;
 
 	vdso_base += VVAR_NR_PAGES * PAGE_SIZE;
@@ -288,7 +285,7 @@ static int aarch32_alloc_kuser_vdso_page(void)
 
 	memcpy((void *)(vdso_page + 0x1000 - kuser_sz), __kuser_helper_start,
 	       kuser_sz);
-	aarch32_vectors_page = virt_to_page(vdso_page);
+	aarch32_vectors_page = virt_to_page((void *)vdso_page);
 	return 0;
 }
 

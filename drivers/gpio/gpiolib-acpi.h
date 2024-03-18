@@ -9,7 +9,6 @@
 #define GPIOLIB_ACPI_H
 
 #include <linux/err.h>
-#include <linux/errno.h>
 #include <linux/types.h>
 
 #include <linux/gpio/consumer.h>
@@ -34,7 +33,7 @@ struct gpio_desc *acpi_find_gpio(struct fwnode_handle *fwnode,
 				 enum gpiod_flags *dflags,
 				 unsigned long *lookupflags);
 
-int acpi_gpio_count(struct device *dev, const char *con_id);
+int acpi_gpio_count(const struct fwnode_handle *fwnode, const char *con_id);
 #else
 static inline void acpi_gpiochip_add(struct gpio_chip *chip) { }
 static inline void acpi_gpiochip_remove(struct gpio_chip *chip) { }
@@ -52,7 +51,8 @@ acpi_find_gpio(struct fwnode_handle *fwnode, const char *con_id,
 {
 	return ERR_PTR(-ENOENT);
 }
-static inline int acpi_gpio_count(struct device *dev, const char *con_id)
+static inline int acpi_gpio_count(const struct fwnode_handle *fwnode,
+				  const char *con_id)
 {
 	return -ENODEV;
 }

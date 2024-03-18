@@ -24,6 +24,7 @@
 #include "strbuf.h"
 #include "mem-events.h"
 #include "annotate.h"
+#include "annotate-data.h"
 #include "event.h"
 #include "time-utils.h"
 #include "cgroup.h"
@@ -108,7 +109,7 @@ static int64_t cmp_null(const void *l, const void *r)
 static int64_t
 sort__thread_cmp(struct hist_entry *left, struct hist_entry *right)
 {
-	return right->thread->tid - left->thread->tid;
+	return thread__tid(right->thread) - thread__tid(left->thread);
 }
 
 static int hist_entry__thread_snprintf(struct hist_entry *he, char *bf,
@@ -117,7 +118,7 @@ static int hist_entry__thread_snprintf(struct hist_entry *he, char *bf,
 	const char *comm = thread__comm_str(he->thread);
 
 	width = max(7U, width) - 8;
-	return repsep_snprintf(bf, size, "%7d:%-*.*s", he->thread->tid,
+	return repsep_snprintf(bf, size, "%7d:%-*.*s", thread__tid(he->thread),
 			       width, width, comm ?: "");
 }
 
@@ -128,7 +129,7 @@ static int hist_entry__thread_filter(struct hist_entry *he, int type, const void
 	if (type != HIST_FILTER__THREAD)
 		return -1;
 
-	return th && he->thread != th;
+	return th && !RC_CHK_EQUAL(he->thread, th);
 }
 
 struct sort_entry sort_thread = {
@@ -137,6 +138,52 @@ struct sort_entry sort_thread = {
 	.se_snprintf	= hist_entry__thread_snprintf,
 	.se_filter	= hist_entry__thread_filter,
 	.se_width_idx	= HISTC_THREAD,
+};
+
+/* --sort simd */
+
+static int64_t
+sort__simd_cmp(struct hist_entry *left, struct hist_entry *right)
+{
+	if (left->simd_flags.arch != right->simd_flags.arch)
+		return (int64_t) left->simd_flags.arch - right->simd_flags.arch;
+
+	return (int64_t) left->simd_flags.pred - right->simd_flags.pred;
+}
+
+static const char *hist_entry__get_simd_name(struct simd_flags *simd_flags)
+{
+	u64 arch = simd_flags->arch;
+
+	if (arch & SIMD_OP_FLAGS_ARCH_SVE)
+		return "SVE";
+	else
+		return "n/a";
+}
+
+static int hist_entry__simd_snprintf(struct hist_entry *he, char *bf,
+				     size_t size, unsigned int width __maybe_unused)
+{
+	const char *name;
+
+	if (!he->simd_flags.arch)
+		return repsep_snprintf(bf, size, "");
+
+	name = hist_entry__get_simd_name(&he->simd_flags);
+
+	if (he->simd_flags.pred & SIMD_OP_FLAGS_PRED_EMPTY)
+		return repsep_snprintf(bf, size, "[e] %s", name);
+	else if (he->simd_flags.pred & SIMD_OP_FLAGS_PRED_PARTIAL)
+		return repsep_snprintf(bf, size, "[p] %s", name);
+
+	return repsep_snprintf(bf, size, "[.] %s", name);
+}
+
+struct sort_entry sort_simd = {
+	.se_header	= "Simd   ",
+	.se_cmp		= sort__simd_cmp,
+	.se_snprintf	= hist_entry__simd_snprintf,
+	.se_width_idx	= HISTC_SIMD,
 };
 
 /* --sort comm */
@@ -184,8 +231,8 @@ struct sort_entry sort_comm = {
 
 static int64_t _sort__dso_cmp(struct map *map_l, struct map *map_r)
 {
-	struct dso *dso_l = map_l ? map_l->dso : NULL;
-	struct dso *dso_r = map_r ? map_r->dso : NULL;
+	struct dso *dso_l = map_l ? map__dso(map_l) : NULL;
+	struct dso *dso_r = map_r ? map__dso(map_r) : NULL;
 	const char *dso_name_l, *dso_name_r;
 
 	if (!dso_l || !dso_r)
@@ -211,13 +258,13 @@ sort__dso_cmp(struct hist_entry *left, struct hist_entry *right)
 static int _hist_entry__dso_snprintf(struct map *map, char *bf,
 				     size_t size, unsigned int width)
 {
-	if (map && map->dso) {
-		const char *dso_name = verbose > 0 ? map->dso->long_name :
-			map->dso->short_name;
-		return repsep_snprintf(bf, size, "%-*.*s", width, width, dso_name);
-	}
+	const struct dso *dso = map ? map__dso(map) : NULL;
+	const char *dso_name = "[unknown]";
 
-	return repsep_snprintf(bf, size, "%-*.*s", width, width, "[unknown]");
+	if (dso)
+		dso_name = verbose > 0 ? dso->long_name : dso->short_name;
+
+	return repsep_snprintf(bf, size, "%-*.*s", width, width, dso_name);
 }
 
 static int hist_entry__dso_snprintf(struct hist_entry *he, char *bf,
@@ -233,7 +280,7 @@ static int hist_entry__dso_filter(struct hist_entry *he, int type, const void *a
 	if (type != HIST_FILTER__DSO)
 		return -1;
 
-	return dso && (!he->ms.map || he->ms.map->dso != dso);
+	return dso && (!he->ms.map || map__dso(he->ms.map) != dso);
 }
 
 struct sort_entry sort_dso = {
@@ -313,12 +360,12 @@ static int _hist_entry__sym_snprintf(struct map_symbol *ms,
 	size_t ret = 0;
 
 	if (verbose > 0) {
-		char o = map ? dso__symtab_origin(map->dso) : '!';
+		struct dso *dso = map ? map__dso(map) : NULL;
+		char o = dso ? dso__symtab_origin(dso) : '!';
 		u64 rip = ip;
 
-		if (map && map->dso && map->dso->kernel
-		    && map->dso->adjust_symbols)
-			rip = map->unmap_ip(map, ip);
+		if (dso && dso->kernel && dso->adjust_symbols)
+			rip = map__unmap_ip(map, ip);
 
 		ret += repsep_snprintf(bf, size, "%-#*llx %c ",
 				       BITS_PER_LONG / 4 + 2, rip, o);
@@ -329,7 +376,7 @@ static int _hist_entry__sym_snprintf(struct map_symbol *ms,
 		if (sym->type == STT_OBJECT) {
 			ret += repsep_snprintf(bf + ret, size - ret, "%s", sym->name);
 			ret += repsep_snprintf(bf + ret, size - ret, "+0x%llx",
-					ip - map->unmap_ip(map, sym->start));
+					ip - map__unmap_ip(map, sym->start));
 		} else {
 			ret += repsep_snprintf(bf + ret, size - ret, "%.*s",
 					       width - ret,
@@ -370,6 +417,52 @@ struct sort_entry sort_sym = {
 	.se_snprintf	= hist_entry__sym_snprintf,
 	.se_filter	= hist_entry__sym_filter,
 	.se_width_idx	= HISTC_SYMBOL,
+};
+
+/* --sort symoff */
+
+static int64_t
+sort__symoff_cmp(struct hist_entry *left, struct hist_entry *right)
+{
+	int64_t ret;
+
+	ret = sort__sym_cmp(left, right);
+	if (ret)
+		return ret;
+
+	return left->ip - right->ip;
+}
+
+static int64_t
+sort__symoff_sort(struct hist_entry *left, struct hist_entry *right)
+{
+	int64_t ret;
+
+	ret = sort__sym_sort(left, right);
+	if (ret)
+		return ret;
+
+	return left->ip - right->ip;
+}
+
+static int
+hist_entry__symoff_snprintf(struct hist_entry *he, char *bf, size_t size, unsigned int width)
+{
+	struct symbol *sym = he->ms.sym;
+
+	if (sym == NULL)
+		return repsep_snprintf(bf, size, "[%c] %-#.*llx", he->level, width - 4, he->ip);
+
+	return repsep_snprintf(bf, size, "[%c] %s+0x%llx", he->level, sym->name, he->ip - sym->start);
+}
+
+struct sort_entry sort_sym_offset = {
+	.se_header	= "Symbol Offset",
+	.se_cmp		= sort__symoff_cmp,
+	.se_sort	= sort__symoff_sort,
+	.se_snprintf	= hist_entry__symoff_snprintf,
+	.se_filter	= hist_entry__sym_filter,
+	.se_width_idx	= HISTC_SYMBOL_OFFSET,
 };
 
 /* --sort srcline */
@@ -537,21 +630,21 @@ static int hist_entry__sym_ipc_snprintf(struct hist_entry *he, char *bf,
 {
 
 	struct symbol *sym = he->ms.sym;
-	struct annotation *notes;
+	struct annotated_branch *branch;
 	double ipc = 0.0, coverage = 0.0;
 	char tmp[64];
 
 	if (!sym)
 		return repsep_snprintf(bf, size, "%-*s", width, "-");
 
-	notes = symbol__annotation(sym);
+	branch = symbol__annotation(sym)->branch;
 
-	if (notes->hit_cycles)
-		ipc = notes->hit_insn / ((double)notes->hit_cycles);
+	if (branch && branch->hit_cycles)
+		ipc = branch->hit_insn / ((double)branch->hit_cycles);
 
-	if (notes->total_insn) {
-		coverage = notes->cover_insn * 100.0 /
-			((double)notes->total_insn);
+	if (branch && branch->total_insn) {
+		coverage = branch->cover_insn * 100.0 /
+			((double)branch->total_insn);
 	}
 
 	snprintf(tmp, sizeof(tmp), "%-5.2f [%5.1f%%]", ipc, coverage);
@@ -595,9 +688,9 @@ static char *hist_entry__get_srcfile(struct hist_entry *e)
 	if (!map)
 		return no_srcfile;
 
-	sf = __get_srcline(map->dso, map__rip_2objdump(map, e->ip),
+	sf = __get_srcline(map__dso(map), map__rip_2objdump(map, e->ip),
 			 e->ms.sym, false, true, true, e->ip);
-	if (!strcmp(sf, SRCLINE_UNKNOWN))
+	if (sf == SRCLINE_UNKNOWN)
 		return no_srcfile;
 	p = strchr(sf, ':');
 	if (p && *sf) {
@@ -611,12 +704,7 @@ static char *hist_entry__get_srcfile(struct hist_entry *e)
 static int64_t
 sort__srcfile_cmp(struct hist_entry *left, struct hist_entry *right)
 {
-	if (!left->srcfile)
-		left->srcfile = hist_entry__get_srcfile(left);
-	if (!right->srcfile)
-		right->srcfile = hist_entry__get_srcfile(right);
-
-	return strcmp(right->srcfile, left->srcfile);
+	return sort__srcline_cmp(left, right);
 }
 
 static int64_t
@@ -762,7 +850,7 @@ static int hist_entry__cgroup_snprintf(struct hist_entry *he,
 	const char *cgrp_name = "N/A";
 
 	if (he->cgroup) {
-		struct cgroup *cgrp = cgroup__find(he->ms.maps->machine->env,
+		struct cgroup *cgrp = cgroup__find(maps__machine(he->ms.maps)->env,
 						   he->cgroup);
 		if (cgrp != NULL)
 			cgrp_name = cgrp->name;
@@ -941,7 +1029,7 @@ static int hist_entry__dso_from_filter(struct hist_entry *he, int type,
 		return -1;
 
 	return dso && (!he->branch_info || !he->branch_info->from.ms.map ||
-		       he->branch_info->from.ms.map->dso != dso);
+		map__dso(he->branch_info->from.ms.map) != dso);
 }
 
 static int64_t
@@ -973,14 +1061,13 @@ static int hist_entry__dso_to_filter(struct hist_entry *he, int type,
 		return -1;
 
 	return dso && (!he->branch_info || !he->branch_info->to.ms.map ||
-		       he->branch_info->to.ms.map->dso != dso);
+		map__dso(he->branch_info->to.ms.map) != dso);
 }
 
 static int64_t
 sort__sym_from_cmp(struct hist_entry *left, struct hist_entry *right)
 {
-	struct addr_map_symbol *from_l = &left->branch_info->from;
-	struct addr_map_symbol *from_r = &right->branch_info->from;
+	struct addr_map_symbol *from_l, *from_r;
 
 	if (!left->branch_info || !right->branch_info)
 		return cmp_null(left->branch_info, right->branch_info);
@@ -1106,7 +1193,7 @@ static int _hist_entry__addr_snprintf(struct map_symbol *ms,
 		if (sym->type == STT_OBJECT) {
 			ret += repsep_snprintf(bf + ret, size - ret, "%s", sym->name);
 			ret += repsep_snprintf(bf + ret, size - ret, "+0x%llx",
-					ip - map->unmap_ip(map, sym->start));
+					ip - map__unmap_ip(map, sym->start));
 		} else {
 			ret += repsep_snprintf(bf + ret, size - ret, "%.*s",
 					       width - ret,
@@ -1465,6 +1552,7 @@ sort__dcacheline_cmp(struct hist_entry *left, struct hist_entry *right)
 {
 	u64 l, r;
 	struct map *l_map, *r_map;
+	struct dso *l_dso, *r_dso;
 	int rc;
 
 	if (!left->mem_info)  return -1;
@@ -1484,7 +1572,9 @@ sort__dcacheline_cmp(struct hist_entry *left, struct hist_entry *right)
 	if (!l_map) return -1;
 	if (!r_map) return 1;
 
-	rc = dso__cmp_id(l_map->dso, r_map->dso);
+	l_dso = map__dso(l_map);
+	r_dso = map__dso(r_map);
+	rc = dso__cmp_id(l_dso, r_dso);
 	if (rc)
 		return rc;
 	/*
@@ -1496,13 +1586,14 @@ sort__dcacheline_cmp(struct hist_entry *left, struct hist_entry *right)
 	 */
 
 	if ((left->cpumode != PERF_RECORD_MISC_KERNEL) &&
-	    (!(l_map->flags & MAP_SHARED)) &&
-	    !l_map->dso->id.maj && !l_map->dso->id.min &&
-	    !l_map->dso->id.ino && !l_map->dso->id.ino_generation) {
+	    (!(map__flags(l_map) & MAP_SHARED)) && !l_dso->id.maj && !l_dso->id.min &&
+	    !l_dso->id.ino && !l_dso->id.ino_generation) {
 		/* userspace anonymous */
 
-		if (left->thread->pid_ > right->thread->pid_) return -1;
-		if (left->thread->pid_ < right->thread->pid_) return 1;
+		if (thread__pid(left->thread) > thread__pid(right->thread))
+			return -1;
+		if (thread__pid(left->thread) < thread__pid(right->thread))
+			return 1;
 	}
 
 addr:
@@ -1526,16 +1617,16 @@ static int hist_entry__dcacheline_snprintf(struct hist_entry *he, char *bf,
 
 	if (he->mem_info) {
 		struct map *map = he->mem_info->daddr.ms.map;
+		struct dso *dso = map ? map__dso(map) : NULL;
 
 		addr = cl_address(he->mem_info->daddr.al_addr, chk_double_cl);
 		ms = &he->mem_info->daddr.ms;
 
 		/* print [s] for shared data mmaps */
 		if ((he->cpumode != PERF_RECORD_MISC_KERNEL) &&
-		     map && !(map->prot & PROT_EXEC) &&
-		    (map->flags & MAP_SHARED) &&
-		    (map->dso->id.maj || map->dso->id.min ||
-		     map->dso->id.ino || map->dso->id.ino_generation))
+		     map && !(map__prot(map) & PROT_EXEC) &&
+		     (map__flags(map) & MAP_SHARED) &&
+		    (dso->id.maj || dso->id.min || dso->id.ino || dso->id.ino_generation))
 			level = 's';
 		else if (!map)
 			level = 'X';
@@ -2031,9 +2122,8 @@ sort__dso_size_cmp(struct hist_entry *left, struct hist_entry *right)
 static int _hist_entry__dso_size_snprintf(struct map *map, char *bf,
 					  size_t bf_size, unsigned int width)
 {
-	if (map && map->dso)
-		return repsep_snprintf(bf, bf_size, "%*d", width,
-				       map__size(map));
+	if (map && map__dso(map))
+		return repsep_snprintf(bf, bf_size, "%*d", width, map__size(map));
 
 	return repsep_snprintf(bf, bf_size, "%*s", width, "unknown");
 }
@@ -2051,7 +2141,7 @@ struct sort_entry sort_dso_size = {
 	.se_width_idx	= HISTC_DSO_SIZE,
 };
 
-/* --sort dso_size */
+/* --sort addr */
 
 static int64_t
 sort__addr_cmp(struct hist_entry *left, struct hist_entry *right)
@@ -2062,9 +2152,9 @@ sort__addr_cmp(struct hist_entry *left, struct hist_entry *right)
 	struct map *right_map = right->ms.map;
 
 	if (left_map)
-		left_ip = left_map->unmap_ip(left_map, left_ip);
+		left_ip = map__unmap_ip(left_map, left_ip);
 	if (right_map)
-		right_ip = right_map->unmap_ip(right_map, right_ip);
+		right_ip = map__unmap_ip(right_map, right_ip);
 
 	return _sort__addr_cmp(left_ip, right_ip);
 }
@@ -2076,7 +2166,7 @@ static int hist_entry__addr_snprintf(struct hist_entry *he, char *bf,
 	struct map *map = he->ms.map;
 
 	if (map)
-		ip = map->unmap_ip(map, ip);
+		ip = map__unmap_ip(map, ip);
 
 	return repsep_snprintf(bf, size, "%-#*llx", width, ip);
 }
@@ -2086,6 +2176,152 @@ struct sort_entry sort_addr = {
 	.se_cmp		= sort__addr_cmp,
 	.se_snprintf	= hist_entry__addr_snprintf,
 	.se_width_idx	= HISTC_ADDR,
+};
+
+/* --sort type */
+
+struct annotated_data_type unknown_type = {
+	.self = {
+		.type_name = (char *)"(unknown)",
+		.children = LIST_HEAD_INIT(unknown_type.self.children),
+	},
+};
+
+static int64_t
+sort__type_cmp(struct hist_entry *left, struct hist_entry *right)
+{
+	return sort__addr_cmp(left, right);
+}
+
+static void sort__type_init(struct hist_entry *he)
+{
+	if (he->mem_type)
+		return;
+
+	he->mem_type = hist_entry__get_data_type(he);
+	if (he->mem_type == NULL) {
+		he->mem_type = &unknown_type;
+		he->mem_type_off = 0;
+	}
+}
+
+static int64_t
+sort__type_collapse(struct hist_entry *left, struct hist_entry *right)
+{
+	struct annotated_data_type *left_type = left->mem_type;
+	struct annotated_data_type *right_type = right->mem_type;
+
+	if (!left_type) {
+		sort__type_init(left);
+		left_type = left->mem_type;
+	}
+
+	if (!right_type) {
+		sort__type_init(right);
+		right_type = right->mem_type;
+	}
+
+	return strcmp(left_type->self.type_name, right_type->self.type_name);
+}
+
+static int64_t
+sort__type_sort(struct hist_entry *left, struct hist_entry *right)
+{
+	return sort__type_collapse(left, right);
+}
+
+static int hist_entry__type_snprintf(struct hist_entry *he, char *bf,
+				     size_t size, unsigned int width)
+{
+	return repsep_snprintf(bf, size, "%-*s", width, he->mem_type->self.type_name);
+}
+
+struct sort_entry sort_type = {
+	.se_header	= "Data Type",
+	.se_cmp		= sort__type_cmp,
+	.se_collapse	= sort__type_collapse,
+	.se_sort	= sort__type_sort,
+	.se_init	= sort__type_init,
+	.se_snprintf	= hist_entry__type_snprintf,
+	.se_width_idx	= HISTC_TYPE,
+};
+
+/* --sort typeoff */
+
+static int64_t
+sort__typeoff_sort(struct hist_entry *left, struct hist_entry *right)
+{
+	struct annotated_data_type *left_type = left->mem_type;
+	struct annotated_data_type *right_type = right->mem_type;
+	int64_t ret;
+
+	if (!left_type) {
+		sort__type_init(left);
+		left_type = left->mem_type;
+	}
+
+	if (!right_type) {
+		sort__type_init(right);
+		right_type = right->mem_type;
+	}
+
+	ret = strcmp(left_type->self.type_name, right_type->self.type_name);
+	if (ret)
+		return ret;
+	return left->mem_type_off - right->mem_type_off;
+}
+
+static void fill_member_name(char *buf, size_t sz, struct annotated_member *m,
+			     int offset, bool first)
+{
+	struct annotated_member *child;
+
+	if (list_empty(&m->children))
+		return;
+
+	list_for_each_entry(child, &m->children, node) {
+		if (child->offset <= offset && offset < child->offset + child->size) {
+			int len = 0;
+
+			/* It can have anonymous struct/union members */
+			if (child->var_name) {
+				len = scnprintf(buf, sz, "%s%s",
+						first ? "" : ".", child->var_name);
+				first = false;
+			}
+
+			fill_member_name(buf + len, sz - len, child, offset, first);
+			return;
+		}
+	}
+}
+
+static int hist_entry__typeoff_snprintf(struct hist_entry *he, char *bf,
+				     size_t size, unsigned int width __maybe_unused)
+{
+	struct annotated_data_type *he_type = he->mem_type;
+	char buf[4096];
+
+	buf[0] = '\0';
+	if (list_empty(&he_type->self.children))
+		snprintf(buf, sizeof(buf), "no field");
+	else
+		fill_member_name(buf, sizeof(buf), &he_type->self,
+				 he->mem_type_off, true);
+	buf[4095] = '\0';
+
+	return repsep_snprintf(bf, size, "%s %+d (%s)", he_type->self.type_name,
+			       he->mem_type_off, buf);
+}
+
+struct sort_entry sort_type_offset = {
+	.se_header	= "Data Type Offset",
+	.se_cmp		= sort__type_cmp,
+	.se_collapse	= sort__typeoff_sort,
+	.se_sort	= sort__typeoff_sort,
+	.se_init	= sort__type_init,
+	.se_snprintf	= hist_entry__typeoff_snprintf,
+	.se_width_idx	= HISTC_TYPE_OFFSET,
 };
 
 
@@ -2142,6 +2378,10 @@ static struct sort_dimension common_sort_dimensions[] = {
 	DIM(SORT_ADDR, "addr", sort_addr),
 	DIM(SORT_LOCAL_RETIRE_LAT, "local_retire_lat", sort_local_p_stage_cyc),
 	DIM(SORT_GLOBAL_RETIRE_LAT, "retire_lat", sort_global_p_stage_cyc),
+	DIM(SORT_SIMD, "simd", sort_simd),
+	DIM(SORT_ANNOTATE_DATA_TYPE, "type", sort_type),
+	DIM(SORT_ANNOTATE_DATA_TYPE_OFFSET, "typeoff", sort_type_offset),
+	DIM(SORT_SYM_OFFSET, "symoff", sort_sym_offset),
 };
 
 #undef DIM
@@ -2851,7 +3091,7 @@ static struct evsel *find_evsel(struct evlist *evlist, char *event_name)
 	full_name = !!strchr(event_name, ':');
 	evlist__for_each_entry(evlist, pos) {
 		/* case 2 */
-		if (full_name && !strcmp(pos->name, event_name))
+		if (full_name && evsel__name_is(pos, event_name))
 			return pos;
 		/* case 3 */
 		if (!full_name && strstr(pos->name, event_name)) {
@@ -3132,7 +3372,7 @@ int sort_dimension__add(struct perf_hpp_list *list, const char *tok,
 				sort_dimension_add_dynamic_header(sd);
 		}
 
-		if (sd->entry == &sort_parent) {
+		if (sd->entry == &sort_parent && parent_pattern) {
 			int ret = regcomp(&parent_regex, parent_pattern, REG_EXTENDED);
 			if (ret) {
 				char err[BUFSIZ];
@@ -3161,6 +3401,8 @@ int sort_dimension__add(struct perf_hpp_list *list, const char *tok,
 			list->thread = 1;
 		} else if (sd->entry == &sort_comm) {
 			list->comm = 1;
+		} else if (sd->entry == &sort_type_offset) {
+			symbol_conf.annotate_data_member = true;
 		}
 
 		return __sort_dimension__add(sd, list, level);

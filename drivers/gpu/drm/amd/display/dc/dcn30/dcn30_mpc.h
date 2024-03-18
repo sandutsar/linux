@@ -779,7 +779,6 @@
 	type MPCC_MCM_1DLUT_LUT_DATA;\
 	type MPCC_MCM_1DLUT_LUT_WRITE_COLOR_MASK;\
 	type MPCC_MCM_1DLUT_LUT_READ_COLOR_SEL;\
-	type MPCC_MCM_1DLUT_LUT_READ_DBG;\
 	type MPCC_MCM_1DLUT_LUT_HOST_SEL;\
 	type MPCC_MCM_1DLUT_LUT_CONFIG_MODE;\
 	type MPCC_MCM_1DLUT_RAMA_EXP_REGION_START_B;\
@@ -1056,6 +1055,10 @@ void mpc3_set_gamut_remap(
 	struct mpc *mpc,
 	int mpcc_id,
 	const struct mpc_grph_gamut_adjustment *adjust);
+
+void mpc3_get_gamut_remap(struct mpc *mpc,
+			  int mpcc_id,
+			  struct mpc_grph_gamut_adjustment *adjust);
 
 void mpc3_set_rmu_mux(
 	struct mpc *mpc,

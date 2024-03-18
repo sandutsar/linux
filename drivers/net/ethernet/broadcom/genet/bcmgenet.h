@@ -645,7 +645,7 @@ struct bcmgenet_priv {
 
 	struct bcmgenet_mib_counters mib;
 
-	struct ethtool_eee eee;
+	struct ethtool_keee eee;
 };
 
 #define GENET_IO_MACRO(name, offset)					\
@@ -702,5 +702,8 @@ int bcmgenet_wol_power_down_cfg(struct bcmgenet_priv *priv,
 				enum bcmgenet_power_mode mode);
 void bcmgenet_wol_power_up_cfg(struct bcmgenet_priv *priv,
 			       enum bcmgenet_power_mode mode);
+
+void bcmgenet_eee_enable_set(struct net_device *dev, bool enable,
+			     bool tx_lpi_enabled);
 
 #endif /* __BCMGENET_H__ */

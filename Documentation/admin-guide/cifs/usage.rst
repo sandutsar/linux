@@ -45,7 +45,7 @@ Installation instructions
 
 If you have built the CIFS vfs as module (successfully) simply
 type ``make modules_install`` (or if you prefer, manually copy the file to
-the modules directory e.g. /lib/modules/2.4.10-4GB/kernel/fs/cifs/cifs.ko).
+the modules directory e.g. /lib/modules/6.3.0-060300-generic/kernel/fs/smb/client/cifs.ko).
 
 If you have built the CIFS vfs into the kernel itself, follow the instructions
 for your distribution on how to install a new kernel (usually you
@@ -66,22 +66,22 @@ If cifs is built as a module, then the size and number of network buffers
 and maximum number of simultaneous requests to one server can be configured.
 Changing these from their defaults is not recommended. By executing modinfo::
 
-	modinfo kernel/fs/cifs/cifs.ko
+	modinfo <path to cifs.ko>
 
-on kernel/fs/cifs/cifs.ko the list of configuration changes that can be made
+on kernel/fs/smb/client/cifs.ko the list of configuration changes that can be made
 at module initialization time (by running insmod cifs.ko) can be seen.
 
 Recommendations
 ===============
 
-To improve security the SMB2.1 dialect or later (usually will get SMB3) is now
+To improve security the SMB2.1 dialect or later (usually will get SMB3.1.1) is now
 the new default. To use old dialects (e.g. to mount Windows XP) use "vers=1.0"
 on mount (or vers=2.0 for Windows Vista).  Note that the CIFS (vers=1.0) is
 much older and less secure than the default dialect SMB3 which includes
 many advanced security features such as downgrade attack detection
 and encrypted shares and stronger signing and authentication algorithms.
 There are additional mount options that may be helpful for SMB3 to get
-improved POSIX behavior (NB: can use vers=3.0 to force only SMB3, never 2.1):
+improved POSIX behavior (NB: can use vers=3 to force SMB3 or later, never 2.1):
 
    ``mfsymlinks`` and either ``cifsacl`` or ``modefromsid`` (usually with ``idsfromsid``)
 
@@ -715,6 +715,7 @@ DebugData		Displays information about active CIFS sessions and
 Stats			Lists summary resource usage information as well as per
 			share statistics.
 open_files		List all the open file handles on all active SMB sessions.
+mount_params            List of all mount parameters available for the module
 ======================= =======================================================
 
 Configuration pseudo-files:
@@ -863,6 +864,11 @@ module loading or during the runtime by using the interface::
 i.e.::
 
     echo "value" > /sys/module/cifs/parameters/<param>
+
+More detailed descriptions of the available module parameters and their values
+can be seen by doing:
+
+    modinfo cifs (or modinfo smb3)
 
 ================= ==========================================================
 1. enable_oplocks Enable or disable oplocks. Oplocks are enabled by default.

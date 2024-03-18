@@ -9,7 +9,6 @@ Hardware Monitoring
 
    hwmon-kernel-api
    pmbus-core
-   inspur-ipsps1
    submitting-patches
    sysfs-interface
    userspace-tools
@@ -22,6 +21,7 @@ Hardware Monitoring Kernel Drivers
 
    abituguru
    abituguru3
+   acbel-fsg032
    acpi_power_meter
    ad7314
    adc128d818
@@ -44,13 +44,16 @@ Hardware Monitoring Kernel Drivers
    aquacomputer_d5next
    asb100
    asc7621
+   aspeed-g6-pwm-tach
    aspeed-pwm-tacho
    asus_ec_sensors
+   asus_rog_ryujin
    asus_wmi_sensors
    bcm54140
    bel-pfe
    bpa-rs600
    bt1-pvt
+   chipcap2
    coretemp
    corsair-cpro
    corsair-psu
@@ -73,10 +76,13 @@ Hardware Monitoring Kernel Drivers
    ftsteutates
    g760a
    g762
+   gigabyte_waterforce
    gsc-hwmon
    gl518sm
    gxp-fan-ctrl
    hih6130
+   hp-wmi-sensors
+   hs3001
    ibmaem
    ibm-cffps
    ibmpowernv
@@ -84,6 +90,7 @@ Hardware Monitoring Kernel Drivers
    ina2xx
    ina238
    ina3221
+   inspur-ipsps1
    intel-m10-bmc-hwmon
    ir35221
    ir38064
@@ -118,12 +125,15 @@ Hardware Monitoring Kernel Drivers
    ltc2947
    ltc2978
    ltc2990
+   ltc2991
    ltc3815
    ltc4151
    ltc4215
    ltc4245
    ltc4260
    ltc4261
+   ltc4282
+   ltc4286
    max127
    max15301
    max16064
@@ -139,6 +149,7 @@ Hardware Monitoring Kernel Drivers
    max31760
    max31785
    max31790
+   max31827
    max34440
    max6620
    max6639
@@ -151,9 +162,12 @@ Hardware Monitoring Kernel Drivers
    mcp3021
    menf21bmc
    mlxreg-fan
+   mp2856
    mp2888
    mp2975
    mp5023
+   mp5990
+   mpq8785
    nct6683
    nct6775
    nct7802
@@ -162,6 +176,7 @@ Hardware Monitoring Kernel Drivers
    nsa320
    ntc_thermistor
    nzxt-kraken2
+   nzxt-kraken3
    nzxt-smart2
    occ
    oxp-sensors
@@ -174,7 +189,9 @@ Hardware Monitoring Kernel Drivers
    peci-cputemp
    peci-dimmtemp
    pmbus
+   powerz
    powr1220
+   pt5161l
    pxe1610
    pwm-fan
    q54sj108a2
@@ -184,6 +201,7 @@ Hardware Monitoring Kernel Drivers
    sch5627
    sch5636
    scpi-hwmon
+   sfctemp
    sht15
    sht21
    sht3x
@@ -191,13 +209,13 @@ Hardware Monitoring Kernel Drivers
    shtc1
    sis5595
    sl28cpld
-   smm665
    smpro-hwmon
    smsc47b397
    smsc47m192
    smsc47m1
    sparx5-temp
    stpddc60
+   surface_fan
    sy7636a-hwmon
    tc654
    tc74

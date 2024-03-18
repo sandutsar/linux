@@ -14,6 +14,7 @@
 #include <linux/slab.h>
 #include <linux/of_address.h>
 #include <linux/of_irq.h>
+#include <linux/of_device.h>
 #include <linux/of_platform.h>
 
 MODULE_DESCRIPTION("Broadcom's specific AMBA driver");
@@ -67,7 +68,7 @@ static struct attribute *bcma_device_attrs[] = {
 };
 ATTRIBUTE_GROUPS(bcma_device);
 
-static struct bus_type bcma_bus_type = {
+static const struct bus_type bcma_bus_type = {
 	.name		= "bcma",
 	.match		= bcma_bus_match,
 	.probe		= bcma_device_probe,
@@ -140,17 +141,17 @@ static struct device_node *bcma_of_find_child_device(struct device *parent,
 						     struct bcma_device *core)
 {
 	struct device_node *node;
-	u64 size;
-	const __be32 *reg;
+	int ret;
 
 	if (!parent->of_node)
 		return NULL;
 
 	for_each_child_of_node(parent->of_node, node) {
-		reg = of_get_address(node, 0, &size, NULL);
-		if (!reg)
+		struct resource res;
+		ret = of_address_to_resource(node, 0, &res);
+		if (ret)
 			continue;
-		if (of_translate_address(node, reg) == core->addr)
+		if (res.start == core->addr)
 			return node;
 	}
 	return NULL;

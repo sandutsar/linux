@@ -3,7 +3,7 @@
 DAMON Maintainer Entry Profile
 ==============================
 
-The DAMON subsystem covers the files that listed in 'DATA ACCESS MONITOR'
+The DAMON subsystem covers the files that are listed in 'DATA ACCESS MONITOR'
 section of 'MAINTAINERS' file.
 
 The mailing lists for the subsystem are damon@lists.linux.dev and
@@ -15,14 +15,14 @@ SCM Trees
 
 There are multiple Linux trees for DAMON development.  Patches under
 development or testing are queued in damon/next [2]_ by the DAMON maintainer.
-Suffieicntly reviewed patches will be queued in mm-unstable [1]_ by the memory
+Sufficiently reviewed patches will be queued in mm-unstable [1]_ by the memory
 management subsystem maintainer.  After more sufficient tests, the patches will
 be queued in mm-stable [3]_ , and finally pull-requested to the mainline by the
 memory management subsystem maintainer.
 
 Note again the patches for review should be made against the mm-unstable
-tree[1] whenever possible.  damon/next is only for preview of others' works in
-progress.
+tree [1]_ whenever possible.  damon/next is only for preview of others' works
+in progress.
 
 Submit checklist addendum
 -------------------------
@@ -41,8 +41,8 @@ Further doing below and putting the results will be helpful.
 Key cycle dates
 ---------------
 
-Patches can be sent anytime.  Key cycle dates of the mm-unstable[1] and
-mm-stable[3] trees depend on the memory management subsystem maintainer.
+Patches can be sent anytime.  Key cycle dates of the mm-unstable [1]_ and
+mm-stable [3]_ trees depend on the memory management subsystem maintainer.
 
 Review cadence
 --------------

@@ -330,6 +330,29 @@ static void __init test_copy(void)
 	expect_eq_pbl("0-108,128-1023", bmap2, 1024);
 }
 
+static void __init test_bitmap_region(void)
+{
+	int pos, order;
+
+	DECLARE_BITMAP(bmap, 1000);
+
+	bitmap_zero(bmap, 1000);
+
+	for (order = 0; order < 10; order++) {
+		pos = bitmap_find_free_region(bmap, 1000, order);
+		if (order == 0)
+			expect_eq_uint(pos, 0);
+		else
+			expect_eq_uint(pos, order < 9 ? BIT(order) : -ENOMEM);
+	}
+
+	bitmap_release_region(bmap, 0, 0);
+	for (order = 1; order < 9; order++)
+		bitmap_release_region(bmap, BIT(order), order);
+
+	expect_eq_uint(bitmap_weight(bmap, 1000), 0);
+}
+
 #define EXP2_IN_BITS	(sizeof(exp2) * 8)
 
 static void __init test_replace(void)
@@ -355,6 +378,47 @@ static void __init test_replace(void)
 	bitmap_fill(bmap, 1024);
 	bitmap_replace(bmap, &exp2[1 * nlongs], &exp2[0 * nlongs], exp2_to_exp3_mask, nbits);
 	expect_eq_bitmap(bmap, exp3_1_0, nbits);
+}
+
+static const unsigned long sg_mask[] __initconst = {
+	BITMAP_FROM_U64(0x000000000000035aULL),
+};
+
+static const unsigned long sg_src[] __initconst = {
+	BITMAP_FROM_U64(0x0000000000000667ULL),
+};
+
+static const unsigned long sg_gather_exp[] __initconst = {
+	BITMAP_FROM_U64(0x0000000000000029ULL),
+};
+
+static const unsigned long sg_scatter_exp[] __initconst = {
+	BITMAP_FROM_U64(0x000000000000021aULL),
+};
+
+static void __init test_bitmap_sg(void)
+{
+	unsigned int nbits = 64;
+	DECLARE_BITMAP(bmap_gather, 100);
+	DECLARE_BITMAP(bmap_scatter, 100);
+	DECLARE_BITMAP(bmap_tmp, 100);
+	DECLARE_BITMAP(bmap_res, 100);
+
+	/* Simple gather call */
+	bitmap_zero(bmap_gather, 100);
+	bitmap_gather(bmap_gather, sg_src, sg_mask, nbits);
+	expect_eq_bitmap(sg_gather_exp, bmap_gather, nbits);
+
+	/* Simple scatter call */
+	bitmap_zero(bmap_scatter, 100);
+	bitmap_scatter(bmap_scatter, sg_src, sg_mask, nbits);
+	expect_eq_bitmap(sg_scatter_exp, bmap_scatter, nbits);
+
+	/* Scatter/gather relationship */
+	bitmap_zero(bmap_tmp, 100);
+	bitmap_gather(bmap_tmp, bmap_scatter, sg_mask, nbits);
+	bitmap_scatter(bmap_res, bmap_tmp, sg_mask, nbits);
+	expect_eq_bitmap(bmap_scatter, bmap_res, nbits);
 }
 
 #define PARSE_TIME	0x1
@@ -470,6 +534,7 @@ static void __init test_bitmap_parselist(void)
 		if (err != ptest.errno) {
 			pr_err("parselist: %d: input is %s, errno is %d, expected %d\n",
 					i, ptest.in, err, ptest.errno);
+			failed_tests++;
 			continue;
 		}
 
@@ -478,6 +543,7 @@ static void __init test_bitmap_parselist(void)
 			pr_err("parselist: %d: input is %s, result is 0x%lx, expected 0x%lx\n",
 					i, ptest.in, bmap[0],
 					*ptest.expected);
+			failed_tests++;
 			continue;
 		}
 
@@ -511,11 +577,13 @@ static void __init test_bitmap_printlist(void)
 
 	if (ret != slen + 1) {
 		pr_err("bitmap_print_to_pagebuf: result is %d, expected %d\n", ret, slen);
+		failed_tests++;
 		goto out;
 	}
 
 	if (strncmp(buf, expected, slen)) {
 		pr_err("bitmap_print_to_pagebuf: result is %s, expected %s\n", buf, expected);
+		failed_tests++;
 		goto out;
 	}
 
@@ -583,6 +651,7 @@ static void __init test_bitmap_parse(void)
 		if (err != test.errno) {
 			pr_err("parse: %d: input is %s, errno is %d, expected %d\n",
 					i, test.in, err, test.errno);
+			failed_tests++;
 			continue;
 		}
 
@@ -591,6 +660,7 @@ static void __init test_bitmap_parse(void)
 			pr_err("parse: %d: input is %s, result is 0x%lx, expected 0x%lx\n",
 					i, test.in, bmap[0],
 					*test.expected);
+			failed_tests++;
 			continue;
 		}
 
@@ -615,10 +685,12 @@ static void __init test_bitmap_arr32(void)
 
 		next_bit = find_next_bit(bmap2,
 				round_up(nbits, BITS_PER_LONG), nbits);
-		if (next_bit < round_up(nbits, BITS_PER_LONG))
+		if (next_bit < round_up(nbits, BITS_PER_LONG)) {
 			pr_err("bitmap_copy_arr32(nbits == %d:"
 				" tail is not safely cleared: %d\n",
 				nbits, next_bit);
+			failed_tests++;
+		}
 
 		if (nbits < EXP1_IN_BITS - 32)
 			expect_eq_uint(arr[DIV_ROUND_UP(nbits, 32)],
@@ -641,15 +713,19 @@ static void __init test_bitmap_arr64(void)
 		expect_eq_bitmap(bmap2, exp1, nbits);
 
 		next_bit = find_next_bit(bmap2, round_up(nbits, BITS_PER_LONG), nbits);
-		if (next_bit < round_up(nbits, BITS_PER_LONG))
+		if (next_bit < round_up(nbits, BITS_PER_LONG)) {
 			pr_err("bitmap_copy_arr64(nbits == %d:"
 				" tail is not safely cleared: %d\n", nbits, next_bit);
+			failed_tests++;
+		}
 
 		if ((nbits % 64) &&
-		    (arr[(nbits - 1) / 64] & ~GENMASK_ULL((nbits - 1) % 64, 0)))
+		    (arr[(nbits - 1) / 64] & ~GENMASK_ULL((nbits - 1) % 64, 0))) {
 			pr_err("bitmap_to_arr64(nbits == %d): tail is not safely cleared: 0x%016llx (must be 0x%016llx)\n",
 			       nbits, arr[(nbits - 1) / 64],
 			       GENMASK_ULL((nbits - 1) % 64, 0));
+			failed_tests++;
+		}
 
 		if (nbits < EXP1_IN_BITS - 64)
 			expect_eq_uint(arr[DIV_ROUND_UP(nbits, 64)], 0xa5a5a5a5);
@@ -1149,6 +1225,10 @@ static void __init test_bitmap_print_buf(void)
 	}
 }
 
+/*
+ * FIXME: Clang breaks compile-time evaluations when KASAN and GCOV are enabled.
+ * To workaround it, GCOV is force-disabled in Makefile for this configuration.
+ */
 static void __init test_bitmap_const_eval(void)
 {
 	DECLARE_BITMAP(bitmap, BITS_PER_LONG);
@@ -1174,11 +1254,7 @@ static void __init test_bitmap_const_eval(void)
 	 * the compiler is fixed.
 	 */
 	bitmap_clear(bitmap, 0, BITS_PER_LONG);
-#if defined(__s390__) && defined(__clang__)
-	if (!const_test_bit(7, bitmap))
-#else
 	if (!test_bit(7, bitmap))
-#endif
 		bitmap_set(bitmap, 5, 2);
 
 	/* Equals to `unsigned long bitopvar = BIT(20)` */
@@ -1215,7 +1291,9 @@ static void __init selftest(void)
 	test_zero_clear();
 	test_fill_set();
 	test_copy();
+	test_bitmap_region();
 	test_replace();
+	test_bitmap_sg();
 	test_bitmap_arr32();
 	test_bitmap_arr64();
 	test_bitmap_parse();

@@ -380,11 +380,10 @@ MODULE_DEVICE_TABLE(i2c, ds1621_id);
 
 /* This is the driver that will be inserted */
 static struct i2c_driver ds1621_driver = {
-	.class		= I2C_CLASS_HWMON,
 	.driver = {
 		.name	= "ds1621",
 	},
-	.probe_new	= ds1621_probe,
+	.probe		= ds1621_probe,
 	.id_table	= ds1621_id,
 };
 

@@ -141,7 +141,7 @@ impl Display for TryReserveError {
                 " because the computed capacity exceeded the collection's maximum"
             }
             TryReserveErrorKind::AllocError { .. } => {
-                " because the memory allocator returned a error"
+                " because the memory allocator returned an error"
             }
         };
         fmt.write_str(reason)
@@ -150,7 +150,11 @@ impl Display for TryReserveError {
 
 /// An intermediate trait for specialization of `Extend`.
 #[doc(hidden)]
+#[cfg(not(no_global_oom_handling))]
 trait SpecExtend<I: IntoIterator> {
     /// Extends `self` with the contents of the given iterator.
     fn spec_extend(&mut self, iter: I);
 }
+
+#[stable(feature = "try_reserve", since = "1.57.0")]
+impl core::error::Error for TryReserveError {}

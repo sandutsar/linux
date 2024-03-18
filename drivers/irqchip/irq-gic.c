@@ -162,11 +162,6 @@ static inline void __iomem *gic_cpu_base(struct irq_data *d)
 	return gic_data_cpu_base(gic_data);
 }
 
-static inline unsigned int gic_irq(struct irq_data *d)
-{
-	return d->hwirq;
-}
-
 static inline bool cascading_gic_irq(struct irq_data *d)
 {
 	void *data = irq_data_get_irq_handler_data(d);
@@ -183,14 +178,16 @@ static inline bool cascading_gic_irq(struct irq_data *d)
  */
 static void gic_poke_irq(struct irq_data *d, u32 offset)
 {
-	u32 mask = 1 << (gic_irq(d) % 32);
-	writel_relaxed(mask, gic_dist_base(d) + offset + (gic_irq(d) / 32) * 4);
+	u32 mask = 1 << (irqd_to_hwirq(d) % 32);
+
+	writel_relaxed(mask, gic_dist_base(d) + offset + (irqd_to_hwirq(d) / 32) * 4);
 }
 
 static int gic_peek_irq(struct irq_data *d, u32 offset)
 {
-	u32 mask = 1 << (gic_irq(d) % 32);
-	return !!(readl_relaxed(gic_dist_base(d) + offset + (gic_irq(d) / 32) * 4) & mask);
+	u32 mask = 1 << (irqd_to_hwirq(d) % 32);
+
+	return !!(readl_relaxed(gic_dist_base(d) + offset + (irqd_to_hwirq(d) / 32) * 4) & mask);
 }
 
 static void gic_mask_irq(struct irq_data *d)
@@ -220,7 +217,7 @@ static void gic_unmask_irq(struct irq_data *d)
 
 static void gic_eoi_irq(struct irq_data *d)
 {
-	u32 hwirq = gic_irq(d);
+	irq_hw_number_t hwirq = irqd_to_hwirq(d);
 
 	if (hwirq < 16)
 		hwirq = this_cpu_read(sgi_intid);
@@ -230,7 +227,7 @@ static void gic_eoi_irq(struct irq_data *d)
 
 static void gic_eoimode1_eoi_irq(struct irq_data *d)
 {
-	u32 hwirq = gic_irq(d);
+	irq_hw_number_t hwirq = irqd_to_hwirq(d);
 
 	/* Do not deactivate an IRQ forwarded to a vcpu. */
 	if (irqd_is_forwarded_to_vcpu(d))
@@ -293,8 +290,8 @@ static int gic_irq_get_irqchip_state(struct irq_data *d,
 
 static int gic_set_type(struct irq_data *d, unsigned int type)
 {
+	irq_hw_number_t gicirq = irqd_to_hwirq(d);
 	void __iomem *base = gic_dist_base(d);
-	unsigned int gicirq = gic_irq(d);
 	int ret;
 
 	/* Interrupt configuration for SGIs can't be changed */
@@ -309,7 +306,7 @@ static int gic_set_type(struct irq_data *d, unsigned int type)
 	ret = gic_configure_irq(gicirq, type, base + GIC_DIST_CONFIG, NULL);
 	if (ret && gicirq < 32) {
 		/* Misconfigured PPIs are usually not fatal */
-		pr_warn("GIC: PPI%d is secure or misconfigured\n", gicirq - 16);
+		pr_warn("GIC: PPI%ld is secure or misconfigured\n", gicirq - 16);
 		ret = 0;
 	}
 
@@ -319,7 +316,7 @@ static int gic_set_type(struct irq_data *d, unsigned int type)
 static int gic_irq_set_vcpu_affinity(struct irq_data *d, void *vcpu)
 {
 	/* Only interrupts on the primary GIC can be forwarded to a vcpu. */
-	if (cascading_gic_irq(d) || gic_irq(d) < 16)
+	if (cascading_gic_irq(d) || irqd_to_hwirq(d) < 16)
 		return -EINVAL;
 
 	if (vcpu)
@@ -796,7 +793,7 @@ static void rmw_writeb(u8 bval, void __iomem *addr)
 static int gic_set_affinity(struct irq_data *d, const struct cpumask *mask_val,
 			    bool force)
 {
-	void __iomem *reg = gic_dist_base(d) + GIC_DIST_TARGET + gic_irq(d);
+	void __iomem *reg = gic_dist_base(d) + GIC_DIST_TARGET + irqd_to_hwirq(d);
 	struct gic_chip_data *gic = irq_data_get_irq_chip_data(d);
 	unsigned int cpu;
 
@@ -1081,10 +1078,6 @@ static int gic_irq_domain_map(struct irq_domain *d, unsigned int irq,
 	return 0;
 }
 
-static void gic_irq_domain_unmap(struct irq_domain *d, unsigned int irq)
-{
-}
-
 static int gic_irq_domain_translate(struct irq_domain *d,
 				    struct irq_fwspec *fwspec,
 				    unsigned long *hwirq,
@@ -1167,11 +1160,6 @@ static const struct irq_domain_ops gic_irq_domain_hierarchy_ops = {
 	.free = irq_domain_free_irqs_top,
 };
 
-static const struct irq_domain_ops gic_irq_domain_ops = {
-	.map = gic_irq_domain_map,
-	.unmap = gic_irq_domain_unmap,
-};
-
 static int gic_init_bases(struct gic_chip_data *gic,
 			  struct fwnode_handle *handle)
 {
@@ -1219,30 +1207,9 @@ static int gic_init_bases(struct gic_chip_data *gic,
 		gic_irqs = 1020;
 	gic->gic_irqs = gic_irqs;
 
-	if (handle) {		/* DT/ACPI */
-		gic->domain = irq_domain_create_linear(handle, gic_irqs,
-						       &gic_irq_domain_hierarchy_ops,
-						       gic);
-	} else {		/* Legacy support */
-		/*
-		 * For primary GICs, skip over SGIs.
-		 * No secondary GIC support whatsoever.
-		 */
-		int irq_base;
-
-		gic_irqs -= 16; /* calculate # of irqs to allocate */
-
-		irq_base = irq_alloc_descs(16, 16, gic_irqs,
-					   numa_node_id());
-		if (irq_base < 0) {
-			WARN(1, "Cannot allocate irq_descs @ IRQ16, assuming pre-allocated\n");
-			irq_base = 16;
-		}
-
-		gic->domain = irq_domain_add_legacy(NULL, gic_irqs, irq_base,
-						    16, &gic_irq_domain_ops, gic);
-	}
-
+	gic->domain = irq_domain_create_linear(handle, gic_irqs,
+					       &gic_irq_domain_hierarchy_ops,
+					       gic);
 	if (WARN_ON(!gic->domain)) {
 		ret = -ENODEV;
 		goto error;
@@ -1297,23 +1264,6 @@ static int __init __gic_init_bases(struct gic_chip_data *gic,
 	return ret;
 }
 
-void __init gic_init(void __iomem *dist_base, void __iomem *cpu_base)
-{
-	struct gic_chip_data *gic;
-
-	/*
-	 * Non-DT/ACPI systems won't run a hypervisor, so let's not
-	 * bother with these...
-	 */
-	static_branch_disable(&supports_deactivate_key);
-
-	gic = &gic_data[0];
-	gic->raw_dist_base = dist_base;
-	gic->raw_cpu_base = cpu_base;
-
-	__gic_init_bases(gic, NULL);
-}
-
 static void gic_teardown(struct gic_chip_data *gic)
 {
 	if (WARN_ON(!gic))
@@ -1325,7 +1275,6 @@ static void gic_teardown(struct gic_chip_data *gic)
 		iounmap(gic->raw_cpu_base);
 }
 
-#ifdef CONFIG_OF
 static int gic_cnt __initdata;
 static bool gicv2_force_probe;
 
@@ -1570,12 +1519,6 @@ IRQCHIP_DECLARE(cortex_a7_gic, "arm,cortex-a7-gic", gic_of_init);
 IRQCHIP_DECLARE(msm_8660_qgic, "qcom,msm-8660-qgic", gic_of_init);
 IRQCHIP_DECLARE(msm_qgic2, "qcom,msm-qgic2", gic_of_init);
 IRQCHIP_DECLARE(pl390, "arm,pl390", gic_of_init);
-#else
-int gic_of_init_child(struct device *dev, struct gic_chip_data **gic, int irq)
-{
-	return -ENOTSUPP;
-}
-#endif
 
 #ifdef CONFIG_ACPI
 static struct

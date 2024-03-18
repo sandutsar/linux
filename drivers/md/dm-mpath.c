@@ -2235,11 +2235,8 @@ static int __init dm_multipath_init(void)
 	}
 
 	r = dm_register_target(&multipath_target);
-	if (r < 0) {
-		DMERR("request-based register failed %d", r);
-		r = -EINVAL;
+	if (r < 0)
 		goto bad_register_target;
-	}
 
 	return 0;
 
@@ -2269,5 +2266,5 @@ module_param_named(queue_if_no_path_timeout_secs, queue_if_no_path_timeout_secs,
 MODULE_PARM_DESC(queue_if_no_path_timeout_secs, "No available paths queue IO timeout in seconds");
 
 MODULE_DESCRIPTION(DM_NAME " multipath target");
-MODULE_AUTHOR("Sistina Software <dm-devel@redhat.com>");
+MODULE_AUTHOR("Sistina Software <dm-devel@lists.linux.dev>");
 MODULE_LICENSE("GPL");

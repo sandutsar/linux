@@ -51,7 +51,8 @@ __init bool sysfb_parse_mode(const struct screen_info *si,
 	 *
 	 * It's not easily possible to fix this in struct screen_info,
 	 * as this could break UAPI. The best solution is to compute
-	 * bits_per_pixel here and ignore lfb_depth. In the loop below,
+	 * bits_per_pixel from the color bits, reserved bits and
+	 * reported lfb_depth, whichever is highest.  In the loop below,
 	 * ignore simplefb formats with alpha bits, as EFI and VESA
 	 * don't specify alpha channels.
 	 */
@@ -60,6 +61,7 @@ __init bool sysfb_parse_mode(const struct screen_info *si,
 					  si->green_size + si->green_pos,
 					  si->blue_size + si->blue_pos),
 				     si->rsvd_size + si->rsvd_pos);
+		bits_per_pixel = max_t(u32, bits_per_pixel, si->lfb_depth);
 	} else {
 		bits_per_pixel = si->lfb_depth;
 	}
@@ -89,7 +91,8 @@ __init bool sysfb_parse_mode(const struct screen_info *si,
 }
 
 __init struct platform_device *sysfb_create_simplefb(const struct screen_info *si,
-						     const struct simplefb_platform_data *mode)
+						     const struct simplefb_platform_data *mode,
+						     struct device *parent)
 {
 	struct platform_device *pd;
 	struct resource res;
@@ -140,6 +143,8 @@ __init struct platform_device *sysfb_create_simplefb(const struct screen_info *s
 	pd = platform_device_alloc("simple-framebuffer", 0);
 	if (!pd)
 		return ERR_PTR(-ENOMEM);
+
+	pd->dev.parent = parent;
 
 	sysfb_set_efifb_fwnode(pd);
 

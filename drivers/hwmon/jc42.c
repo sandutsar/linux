@@ -450,7 +450,7 @@ static int jc42_detect(struct i2c_client *client, struct i2c_board_info *info)
 	return -ENODEV;
 }
 
-static const struct hwmon_channel_info *jc42_info[] = {
+static const struct hwmon_channel_info * const jc42_info[] = {
 	HWMON_CHANNEL_INFO(chip,
 			   HWMON_C_REGISTER_TZ | HWMON_C_UPDATE_INTERVAL),
 	HWMON_CHANNEL_INFO(temp,
@@ -497,7 +497,7 @@ static const struct regmap_config jc42_regmap_config = {
 	.writeable_reg = jc42_writable_reg,
 	.readable_reg = jc42_readable_reg,
 	.volatile_reg = jc42_volatile_reg,
-	.cache_type = REGCACHE_RBTREE,
+	.cache_type = REGCACHE_MAPLE,
 };
 
 static int jc42_probe(struct i2c_client *client)
@@ -629,7 +629,7 @@ static struct i2c_driver jc42_driver = {
 		.pm = JC42_DEV_PM_OPS,
 		.of_match_table = of_match_ptr(jc42_of_ids),
 	},
-	.probe_new	= jc42_probe,
+	.probe		= jc42_probe,
 	.remove		= jc42_remove,
 	.id_table	= jc42_id,
 	.detect		= jc42_detect,

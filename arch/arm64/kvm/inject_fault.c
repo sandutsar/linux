@@ -134,7 +134,7 @@ static void inject_abt32(struct kvm_vcpu *vcpu, bool is_pabt, u32 addr)
 	if (vcpu_read_sys_reg(vcpu, TCR_EL1) & TTBCR_EAE) {
 		fsr = DFSR_LPAE | DFSR_FSC_EXTABT_LPAE;
 	} else {
-		/* no need to shuffle FS[4] into DFSR[10] as its 0 */
+		/* no need to shuffle FS[4] into DFSR[10] as it's 0 */
 		fsr = DFSR_FSC_EXTABT_nLPAE;
 	}
 
@@ -204,7 +204,7 @@ void kvm_inject_size_fault(struct kvm_vcpu *vcpu)
 	 * Size Fault at level 0, as if exceeding PARange.
 	 *
 	 * Non-LPAE guests will only get the external abort, as there
-	 * is no way to to describe the ASF.
+	 * is no way to describe the ASF.
 	 */
 	if (vcpu_el1_is_32bit(vcpu) &&
 	    !(vcpu_read_sys_reg(vcpu, TCR_EL1) & TTBCR_EAE))

@@ -725,7 +725,7 @@ static umode_t nct7802_temp_is_visible(struct kobject *kobj,
 	if (index >= 38 && index < 46 && !(reg & 0x01))		/* PECI 0 */
 		return 0;
 
-	if (index >= 0x46 && (!(reg & 0x02)))			/* PECI 1 */
+	if (index >= 46 && !(reg & 0x02))			/* PECI 1 */
 		return 0;
 
 	return attr->mode;
@@ -1051,7 +1051,7 @@ static bool nct7802_regmap_is_volatile(struct device *dev, unsigned int reg)
 static const struct regmap_config nct7802_regmap_config = {
 	.reg_bits = 8,
 	.val_bits = 8,
-	.cache_type = REGCACHE_RBTREE,
+	.cache_type = REGCACHE_MAPLE,
 	.volatile_reg = nct7802_regmap_is_volatile,
 };
 
@@ -1223,7 +1223,7 @@ static struct i2c_driver nct7802_driver = {
 		.name = DRVNAME,
 	},
 	.detect = nct7802_detect,
-	.probe_new = nct7802_probe,
+	.probe = nct7802_probe,
 	.id_table = nct7802_idtable,
 	.address_list = nct7802_address_list,
 };

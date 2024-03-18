@@ -15,6 +15,7 @@
 #include <linux/udp.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
+#include "bpf_compiler.h"
 
 static __always_inline __u32 rol32(__u32 word, unsigned int shift)
 {
@@ -362,51 +363,12 @@ bool encap_v4(struct xdp_md *xdp, struct ctl_value *cval,
 	iph->ttl = 4;
 
 	next_iph_u16 = (__u16 *) iph;
-#pragma clang loop unroll(full)
+	__pragma_loop_unroll_full
 	for (int i = 0; i < sizeof(struct iphdr) >> 1; i++)
 		csum += *next_iph_u16++;
 	iph->check = ~((csum & 0xffff) + (csum >> 16));
 	if (bpf_xdp_adjust_head(xdp, (int)sizeof(struct iphdr)))
 		return false;
-	return true;
-}
-
-static __attribute__ ((noinline))
-bool decap_v6(struct xdp_md *xdp, void **data, void **data_end, bool inner_v4)
-{
-	struct eth_hdr *new_eth;
-	struct eth_hdr *old_eth;
-
-	old_eth = *data;
-	new_eth = *data + sizeof(struct ipv6hdr);
-	memcpy(new_eth->eth_source, old_eth->eth_source, 6);
-	memcpy(new_eth->eth_dest, old_eth->eth_dest, 6);
-	if (inner_v4)
-		new_eth->eth_proto = 8;
-	else
-		new_eth->eth_proto = 56710;
-	if (bpf_xdp_adjust_head(xdp, (int)sizeof(struct ipv6hdr)))
-		return false;
-	*data = (void *)(long)xdp->data;
-	*data_end = (void *)(long)xdp->data_end;
-	return true;
-}
-
-static __attribute__ ((noinline))
-bool decap_v4(struct xdp_md *xdp, void **data, void **data_end)
-{
-	struct eth_hdr *new_eth;
-	struct eth_hdr *old_eth;
-
-	old_eth = *data;
-	new_eth = *data + sizeof(struct iphdr);
-	memcpy(new_eth->eth_source, old_eth->eth_source, 6);
-	memcpy(new_eth->eth_dest, old_eth->eth_dest, 6);
-	new_eth->eth_proto = 8;
-	if (bpf_xdp_adjust_head(xdp, (int)sizeof(struct iphdr)))
-		return false;
-	*data = (void *)(long)xdp->data;
-	*data_end = (void *)(long)xdp->data_end;
 	return true;
 }
 
@@ -430,7 +392,6 @@ int send_icmp_reply(void *data, void *data_end)
 	__u16 *next_iph_u16;
 	__u32 tmp_addr = 0;
 	struct iphdr *iph;
-	__u32 csum1 = 0;
 	__u32 csum = 0;
 	__u64 off = 0;
 
@@ -449,7 +410,7 @@ int send_icmp_reply(void *data, void *data_end)
 	iph->saddr = tmp_addr;
 	iph->check = 0;
 	next_iph_u16 = (__u16 *) iph;
-#pragma clang loop unroll(full)
+	__pragma_loop_unroll_full
 	for (int i = 0; i < sizeof(struct iphdr) >> 1; i++)
 		csum += *next_iph_u16++;
 	iph->check = ~((csum & 0xffff) + (csum >> 16));
@@ -662,7 +623,6 @@ static int process_l3_headers_v4(struct packet_description *pckt,
 				 void *data_end)
 {
 	struct iphdr *iph;
-	__u64 iph_len;
 	int action;
 
 	iph = data + off;
@@ -696,7 +656,6 @@ static int process_packet(void *data, __u64 off, void *data_end,
 	struct packet_description pckt = { };
 	struct vip_definition vip = { };
 	struct lb_stats *data_stats;
-	struct eth_hdr *eth = data;
 	void *lru_map = &lru_cache;
 	struct vip_meta *vip_info;
 	__u32 lru_stats_key = 513;
@@ -704,7 +663,6 @@ static int process_packet(void *data, __u64 off, void *data_end,
 	__u32 stats_key = 512;
 	struct ctl_value *cval;
 	__u16 pkt_bytes;
-	__u64 iph_len;
 	__u8 protocol;
 	__u32 vip_num;
 	int action;

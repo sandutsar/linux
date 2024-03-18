@@ -20,6 +20,15 @@ struct aggr_cpu_id {
 	int socket;
 	/** The die id as read from /sys/devices/system/cpu/cpuX/topology/die_id. */
 	int die;
+	/** The cluster id as read from /sys/devices/system/cpu/cpuX/topology/cluster_id */
+	int cluster;
+	/** The cache level as read from /sys/devices/system/cpu/cpuX/cache/indexY/level */
+	int cache_lvl;
+	/**
+	 * The cache instance ID, which is the first CPU in the
+	 * /sys/devices/system/cpu/cpuX/cache/indexY/shared_cpu_list
+	 */
+	int cache;
 	/** The core id as read from /sys/devices/system/cpu/cpuX/topology/core_id. */
 	int core;
 	/** CPU aggregation, note there is one CPU for each SMT thread. */
@@ -35,6 +44,9 @@ struct cpu_aggr_map {
 	struct aggr_cpu_id map[];
 };
 
+#define cpu_aggr_map__for_each_idx(idx, aggr_map)				\
+	for ((idx) = 0; (idx) < aggr_map->nr; (idx)++)
+
 struct perf_record_cpu_map_data;
 
 bool perf_record_cpu_map_data__test_bit(int i, const struct perf_record_cpu_map_data *data);
@@ -45,7 +57,7 @@ struct perf_cpu_map *cpu_map__new_data(const struct perf_record_cpu_map_data *da
 size_t cpu_map__snprint(struct perf_cpu_map *map, char *buf, size_t size);
 size_t cpu_map__snprint_mask(struct perf_cpu_map *map, char *buf, size_t size);
 size_t cpu_map__fprintf(struct perf_cpu_map *map, FILE *fp);
-const struct perf_cpu_map *cpu_map__online(void); /* thread unsafe */
+struct perf_cpu_map *cpu_map__online(void); /* thread unsafe */
 
 int cpu__setup_cpunode_map(void);
 
@@ -56,7 +68,7 @@ struct perf_cpu cpu__max_present_cpu(void);
 /**
  * cpu_map__is_dummy - Events associated with a pid, rather than a CPU, use a single dummy map with an entry of -1.
  */
-static inline bool cpu_map__is_dummy(struct perf_cpu_map *cpus)
+static inline bool cpu_map__is_dummy(const struct perf_cpu_map *cpus)
 {
 	return perf_cpu_map__nr(cpus) == 1 && perf_cpu_map__cpu(cpus, 0).cpu == -1;
 }
@@ -76,6 +88,11 @@ int cpu__get_socket_id(struct perf_cpu cpu);
  * /sys/devices/system/cpu/cpuX/topology/die_id for the given CPU.
  */
 int cpu__get_die_id(struct perf_cpu cpu);
+/**
+ * cpu__get_cluster_id - Returns the cluster id as read from
+ * /sys/devices/system/cpu/cpuX/topology/cluster_id for the given CPU
+ */
+int cpu__get_cluster_id(struct perf_cpu cpu);
 /**
  * cpu__get_core_id - Returns the core id as read from
  * /sys/devices/system/cpu/cpuX/topology/core_id for the given CPU.
@@ -117,9 +134,15 @@ struct aggr_cpu_id aggr_cpu_id__socket(struct perf_cpu cpu, void *data);
  */
 struct aggr_cpu_id aggr_cpu_id__die(struct perf_cpu cpu, void *data);
 /**
- * aggr_cpu_id__core - Create an aggr_cpu_id with the core, die and socket
- * populated with the core, die and socket for cpu. The function signature is
- * compatible with aggr_cpu_id_get_t.
+ * aggr_cpu_id__cluster - Create an aggr_cpu_id with cluster, die and socket
+ * populated with the cluster, die and socket for cpu. The function signature
+ * is compatible with aggr_cpu_id_get_t.
+ */
+struct aggr_cpu_id aggr_cpu_id__cluster(struct perf_cpu cpu, void *data);
+/**
+ * aggr_cpu_id__core - Create an aggr_cpu_id with the core, cluster, die and
+ * socket populated with the core, die and socket for cpu. The function
+ * signature is compatible with aggr_cpu_id_get_t.
  */
 struct aggr_cpu_id aggr_cpu_id__core(struct perf_cpu cpu, void *data);
 /**

@@ -26,7 +26,7 @@
 #include <asm/cp15.h>
 #include <asm/mach-types.h>
 #include <asm/memblock.h>
-#include <asm/memory.h>
+#include <asm/page.h>
 #include <asm/prom.h>
 #include <asm/sections.h>
 #include <asm/setup.h>
@@ -458,7 +458,7 @@ static int __mark_rodata_ro(void *unused)
 void mark_rodata_ro(void)
 {
 	stop_machine(__mark_rodata_ro, NULL, NULL);
-	debug_checkwx();
+	arm_debug_checkwx();
 }
 
 #else

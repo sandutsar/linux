@@ -38,6 +38,7 @@ struct alias_prop {
 #define OF_ROOT_NODE_SIZE_CELLS_DEFAULT 1
 
 extern struct mutex of_mutex;
+extern raw_spinlock_t devtree_lock;
 extern struct list_head aliases_lookup;
 extern struct kset *of_kset;
 
@@ -58,6 +59,12 @@ static inline int of_property_notify(int action, struct device_node *np,
 	return 0;
 }
 #endif /* CONFIG_OF_DYNAMIC */
+
+#if defined(CONFIG_OF_DYNAMIC) && defined(CONFIG_OF_ADDRESS)
+void of_platform_register_reconfig_notifier(void);
+#else
+static inline void of_platform_register_reconfig_notifier(void) { }
+#endif
 
 #if defined(CONFIG_OF_KOBJ)
 int of_node_is_attached(const struct device_node *node);
@@ -168,8 +175,9 @@ static inline struct device_node *__of_get_dma_parent(const struct device_node *
 }
 #endif
 
+int fdt_scan_reserved_mem(void);
 void fdt_init_reserved_mem(void);
-void fdt_reserved_mem_save_node(unsigned long node, const char *uname,
-			       phys_addr_t base, phys_addr_t size);
+
+bool of_fdt_device_is_available(const void *blob, unsigned long node);
 
 #endif /* _LINUX_OF_PRIVATE_H */

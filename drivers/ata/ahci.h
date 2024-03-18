@@ -241,12 +241,11 @@ enum {
 	AHCI_HFLAG_YES_ALPM		= BIT(23), /* force ALPM cap on */
 	AHCI_HFLAG_NO_WRITE_TO_RO	= BIT(24), /* don't write to read
 						      only registers */
-	AHCI_HFLAG_USE_LPM_POLICY	= BIT(25), /* chipset that should use
-						      SATA_MOBILE_LPM_POLICY
-						      as default lpm_policy */
-	AHCI_HFLAG_SUSPEND_PHYS		= BIT(26), /* handle PHYs during
+	AHCI_HFLAG_SUSPEND_PHYS		= BIT(25), /* handle PHYs during
 						      suspend/resume */
-	AHCI_HFLAG_NO_SXS		= BIT(28), /* SXS not supported */
+	AHCI_HFLAG_NO_SXS		= BIT(26), /* SXS not supported */
+	AHCI_HFLAG_43BIT_ONLY		= BIT(27), /* 43bit DMA addr limit */
+	AHCI_HFLAG_INTEL_PCS_QUIRK	= BIT(28), /* apply Intel PCS quirk */
 
 	/* ap->flags bits */
 
@@ -430,7 +429,7 @@ void ahci_set_em_messages(struct ahci_host_priv *hpriv,
 			  struct ata_port_info *pi);
 int ahci_reset_em(struct ata_host *host);
 void ahci_print_info(struct ata_host *host, const char *scc_s);
-int ahci_host_activate(struct ata_host *host, struct scsi_host_template *sht);
+int ahci_host_activate(struct ata_host *host, const struct scsi_host_template *sht);
 void ahci_error_handler(struct ata_port *ap);
 u32 ahci_handle_port_intr(struct ata_host *host, u32 irq_masked);
 

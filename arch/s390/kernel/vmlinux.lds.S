@@ -14,6 +14,8 @@
 #define BSS_FIRST_SECTIONS *(.bss..swapper_pg_dir) \
 			   *(.bss..invalid_pg_dir)
 
+#define RO_EXCEPTION_TABLE_ALIGN	16
+
 /* Handle ro_after_init data on our own. */
 #define RO_AFTER_INIT_DATA
 
@@ -50,12 +52,21 @@ SECTIONS
 		SOFTIRQENTRY_TEXT
 		FTRACE_HOTPATCH_TRAMPOLINES_TEXT
 		*(.text.*_indirect_*)
+		*(.fixup)
 		*(.gnu.warning)
 		. = ALIGN(PAGE_SIZE);
 		_etext = .;		/* End of text section */
 	} :text = 0x0700
 
 	RO_DATA(PAGE_SIZE)
+	.data.rel.ro : {
+		*(.data.rel.ro .data.rel.ro.*)
+	}
+	.got : {
+		__got_start = .;
+		*(.got)
+		__got_end = .;
+	}
 
 	. = ALIGN(PAGE_SIZE);
 	_sdata = .;		/* Start of data section */
@@ -66,11 +77,13 @@ SECTIONS
 		 *(.data..ro_after_init)
 		JUMP_TABLE_DATA
 	} :data
-	EXCEPTION_TABLE(16)
 	. = ALIGN(PAGE_SIZE);
 	__end_ro_after_init = .;
 
 	RW_DATA(0x100, PAGE_SIZE, THREAD_SIZE)
+	.data.rel : {
+		*(.data.rel*)
+	}
 	BOOT_DATA_PRESERVED
 
 	. = ALIGN(8);
@@ -179,6 +192,7 @@ SECTIONS
 
 	PERCPU_SECTION(0x100)
 
+#ifdef CONFIG_PIE_BUILD
 	.dynsym ALIGN(8) : {
 		__dynsym_start = .;
 		*(.dynsym)
@@ -188,6 +202,19 @@ SECTIONS
 		__rela_dyn_start = .;
 		*(.rela*)
 		__rela_dyn_end = .;
+	}
+	.dynamic ALIGN(8) : {
+		*(.dynamic)
+	}
+	.dynstr ALIGN(8) : {
+		*(.dynstr)
+	}
+#endif
+	.hash ALIGN(8) : {
+		*(.hash)
+	}
+	.gnu.hash ALIGN(8) : {
+		*(.gnu.hash)
 	}
 
 	. = ALIGN(PAGE_SIZE);
@@ -212,19 +239,55 @@ SECTIONS
 		QUAD(__boot_data_preserved_start)		/* bootdata_preserved_off */
 		QUAD(__boot_data_preserved_end -
 		     __boot_data_preserved_start)		/* bootdata_preserved_size */
+#ifdef CONFIG_PIE_BUILD
 		QUAD(__dynsym_start)				/* dynsym_start */
 		QUAD(__rela_dyn_start)				/* rela_dyn_start */
 		QUAD(__rela_dyn_end)				/* rela_dyn_end */
+#else
+		QUAD(__got_start)				/* got_start */
+		QUAD(__got_end)					/* got_end */
+#endif
 		QUAD(_eamode31 - _samode31)			/* amode31_size */
 		QUAD(init_mm)
 		QUAD(swapper_pg_dir)
 		QUAD(invalid_pg_dir)
+#ifdef CONFIG_KASAN
+		QUAD(kasan_early_shadow_page)
+		QUAD(kasan_early_shadow_pte)
+		QUAD(kasan_early_shadow_pmd)
+		QUAD(kasan_early_shadow_pud)
+		QUAD(kasan_early_shadow_p4d)
+#endif
 	} :NONE
 
 	/* Debugging sections.	*/
 	STABS_DEBUG
 	DWARF_DEBUG
 	ELF_DETAILS
+
+	/*
+	 * Make sure that the .got.plt is either completely empty or it
+	 * contains only the three reserved double words.
+	 */
+	.got.plt : {
+		*(.got.plt)
+	}
+	ASSERT(SIZEOF(.got.plt) == 0 || SIZEOF(.got.plt) == 0x18, "Unexpected GOT/PLT entries detected!")
+
+	/*
+	 * Sections that should stay zero sized, which is safer to
+	 * explicitly check instead of blindly discarding.
+	 */
+	.plt : {
+		*(.plt) *(.plt.*) *(.iplt) *(.igot .igot.plt)
+	}
+	ASSERT(SIZEOF(.plt) == 0, "Unexpected run-time procedure linkages detected!")
+#ifndef CONFIG_PIE_BUILD
+	.rela.dyn : {
+		*(.rela.*) *(.rela_*)
+	}
+	ASSERT(SIZEOF(.rela.dyn) == 0, "Unexpected run-time relocations (.rela) detected!")
+#endif
 
 	/* Sections to be discarded */
 	DISCARDS

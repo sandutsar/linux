@@ -91,7 +91,6 @@ extern int static_irq_count;
 extern spinlock_t irq_action_lock;
 
 void unexpected_irq(int irq, void *dev_id, struct pt_regs * regs);
-void init_IRQ(void);
 
 /* sun4m_irq.c */
 void sun4m_init_IRQ(void);
@@ -139,10 +138,10 @@ extern unsigned int t_nmi[];
 extern unsigned int linux_trap_ipi15_sun4d[];
 extern unsigned int linux_trap_ipi15_sun4m[];
 
-extern struct tt_entry trapbase;
-extern struct tt_entry trapbase_cpu1;
-extern struct tt_entry trapbase_cpu2;
-extern struct tt_entry trapbase_cpu3;
+extern struct tt_entry trapbase[];
+extern struct tt_entry trapbase_cpu1[];
+extern struct tt_entry trapbase_cpu2[];
+extern struct tt_entry trapbase_cpu3[];
 
 extern char cputypval[];
 

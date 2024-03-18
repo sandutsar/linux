@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 
-#ifndef _NET_IPV6_GRO_H
-#define _NET_IPV6_GRO_H
+#ifndef _NET_GRO_H
+#define _NET_GRO_H
 
 #include <linux/indirect_call_wrapper.h>
 #include <linux/ip.h>
@@ -9,13 +9,26 @@
 #include <net/ip6_checksum.h>
 #include <linux/skbuff.h>
 #include <net/udp.h>
+#include <net/hotdata.h>
 
 struct napi_gro_cb {
-	/* Virtual address of skb_shinfo(skb)->frags[0].page + offset. */
-	void	*frag0;
+	union {
+		struct {
+			/* Virtual address of skb_shinfo(skb)->frags[0].page + offset. */
+			void	*frag0;
 
-	/* Length of frag0. */
-	unsigned int frag0_len;
+			/* Length of frag0. */
+			unsigned int frag0_len;
+		};
+
+		struct {
+			/* used in skb_gro_receive() slow path */
+			struct sk_buff *last;
+
+			/* jiffies when first packet was created/queued */
+			unsigned long age;
+		};
+	};
 
 	/* This indicates where we are processing relative to skb->data. */
 	int	data_offset;
@@ -29,11 +42,8 @@ struct napi_gro_cb {
 	/* Number of segments aggregated. */
 	u16	count;
 
-	/* Used in ipv6_gro_receive() and foo-over-udp */
+	/* Used in ipv6_gro_receive() and foo-over-udp and esp-in-udp */
 	u16	proto;
-
-	/* jiffies when first packet was created/queued */
-	unsigned long age;
 
 /* Used in napi_gro_cb::free */
 #define NAPI_GRO_FREE             1
@@ -77,9 +87,6 @@ struct napi_gro_cb {
 
 	/* used to support CHECKSUM_COMPLETE for tunneling protocols */
 	__wsum	csum;
-
-	/* used in skb_gro_receive() slow path */
-	struct sk_buff *last;
 };
 
 #define NAPI_GRO_CB(skb) ((struct napi_gro_cb *)(skb)->cb)
@@ -133,21 +140,16 @@ static inline void skb_gro_pull(struct sk_buff *skb, unsigned int len)
 	NAPI_GRO_CB(skb)->data_offset += len;
 }
 
-static inline void *skb_gro_header_fast(struct sk_buff *skb,
+static inline void *skb_gro_header_fast(const struct sk_buff *skb,
 					unsigned int offset)
 {
 	return NAPI_GRO_CB(skb)->frag0 + offset;
 }
 
-static inline int skb_gro_header_hard(struct sk_buff *skb, unsigned int hlen)
+static inline bool skb_gro_may_pull(const struct sk_buff *skb,
+				    unsigned int hlen)
 {
-	return NAPI_GRO_CB(skb)->frag0_len < hlen;
-}
-
-static inline void skb_gro_frag0_invalidate(struct sk_buff *skb)
-{
-	NAPI_GRO_CB(skb)->frag0 = NULL;
-	NAPI_GRO_CB(skb)->frag0_len = 0;
+	return likely(hlen <= NAPI_GRO_CB(skb)->frag0_len);
 }
 
 static inline void *skb_gro_header_slow(struct sk_buff *skb, unsigned int hlen,
@@ -156,28 +158,30 @@ static inline void *skb_gro_header_slow(struct sk_buff *skb, unsigned int hlen,
 	if (!pskb_may_pull(skb, hlen))
 		return NULL;
 
-	skb_gro_frag0_invalidate(skb);
 	return skb->data + offset;
 }
 
-static inline void *skb_gro_header(struct sk_buff *skb,
-					unsigned int hlen, unsigned int offset)
+static inline void *skb_gro_header(struct sk_buff *skb, unsigned int hlen,
+				   unsigned int offset)
 {
 	void *ptr;
 
 	ptr = skb_gro_header_fast(skb, offset);
-	if (skb_gro_header_hard(skb, hlen))
+	if (!skb_gro_may_pull(skb, hlen))
 		ptr = skb_gro_header_slow(skb, hlen, offset);
 	return ptr;
 }
 
-static inline void *skb_gro_network_header(struct sk_buff *skb)
+static inline void *skb_gro_network_header(const struct sk_buff *skb)
 {
-	return (NAPI_GRO_CB(skb)->frag0 ?: skb->data) +
-	       skb_network_offset(skb);
+	if (skb_gro_may_pull(skb, skb_gro_offset(skb)))
+		return skb_gro_header_fast(skb, skb_network_offset(skb));
+
+	return skb_network_header(skb);
 }
 
-static inline __wsum inet_gro_compute_pseudo(struct sk_buff *skb, int proto)
+static inline __wsum inet_gro_compute_pseudo(const struct sk_buff *skb,
+					     int proto)
 {
 	const struct iphdr *iph = skb_gro_network_header(skb);
 
@@ -415,7 +419,8 @@ static inline struct udphdr *udp_gro_udphdr(struct sk_buff *skb)
 	return uh;
 }
 
-static inline __wsum ip6_gro_compute_pseudo(struct sk_buff *skb, int proto)
+static inline __wsum ip6_gro_compute_pseudo(const struct sk_buff *skb,
+					    int proto)
 {
 	const struct ipv6hdr *iph = skb_gro_network_header(skb);
 
@@ -442,9 +447,54 @@ static inline void gro_normal_one(struct napi_struct *napi, struct sk_buff *skb,
 {
 	list_add_tail(&skb->list, &napi->rx_list);
 	napi->rx_count += segs;
-	if (napi->rx_count >= READ_ONCE(gro_normal_batch))
+	if (napi->rx_count >= READ_ONCE(net_hotdata.gro_normal_batch))
 		gro_normal_list(napi);
 }
 
+/* This function is the alternative of 'inet_iif' and 'inet_sdif'
+ * functions in case we can not rely on fields of IPCB.
+ *
+ * The caller must verify skb_valid_dst(skb) is false and skb->dev is initialized.
+ * The caller must hold the RCU read lock.
+ */
+static inline void inet_get_iif_sdif(const struct sk_buff *skb, int *iif, int *sdif)
+{
+	*iif = inet_iif(skb) ?: skb->dev->ifindex;
+	*sdif = 0;
 
-#endif /* _NET_IPV6_GRO_H */
+#if IS_ENABLED(CONFIG_NET_L3_MASTER_DEV)
+	if (netif_is_l3_slave(skb->dev)) {
+		struct net_device *master = netdev_master_upper_dev_get_rcu(skb->dev);
+
+		*sdif = *iif;
+		*iif = master ? master->ifindex : 0;
+	}
+#endif
+}
+
+/* This function is the alternative of 'inet6_iif' and 'inet6_sdif'
+ * functions in case we can not rely on fields of IP6CB.
+ *
+ * The caller must verify skb_valid_dst(skb) is false and skb->dev is initialized.
+ * The caller must hold the RCU read lock.
+ */
+static inline void inet6_get_iif_sdif(const struct sk_buff *skb, int *iif, int *sdif)
+{
+	/* using skb->dev->ifindex because skb_dst(skb) is not initialized */
+	*iif = skb->dev->ifindex;
+	*sdif = 0;
+
+#if IS_ENABLED(CONFIG_NET_L3_MASTER_DEV)
+	if (netif_is_l3_slave(skb->dev)) {
+		struct net_device *master = netdev_master_upper_dev_get_rcu(skb->dev);
+
+		*sdif = *iif;
+		*iif = master ? master->ifindex : 0;
+	}
+#endif
+}
+
+struct packet_offload *gro_find_receive_by_type(__be16 type);
+struct packet_offload *gro_find_complete_by_type(__be16 type);
+
+#endif /* _NET_GRO_H */

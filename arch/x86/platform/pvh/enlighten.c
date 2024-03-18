@@ -3,6 +3,7 @@
 
 #include <xen/hvc-console.h>
 
+#include <asm/bootparam.h>
 #include <asm/io_apic.h>
 #include <asm/hypervisor.h>
 #include <asm/e820/api.h>
@@ -86,7 +87,7 @@ static void __init init_pvh_bootparams(bool xen_guest)
 	}
 
 	/*
-	 * See Documentation/x86/boot.rst.
+	 * See Documentation/arch/x86/boot.rst.
 	 *
 	 * Version 2.12 supports Xen entry point but we will use default x86/PC
 	 * environment (i.e. hardware_subarch 0).
